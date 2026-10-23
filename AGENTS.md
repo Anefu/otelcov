@@ -152,6 +152,14 @@ Other deployment patterns and backends come later, as adapters.
 - **Small core, everything else adapters** (proposed principle, not explicitly confirmed). Core: graph, signal model, lineage, report. Adapters: processors, backends, consumers.
 - **Plugin model: compiled-in Go.** Adapters register a factory under a type name; a builder manifest picks which go into the binary, like the collector's own builder.
 
+### Processing units
+
+- Real processors run once per **unit**, never on whole batches: an `Item` (one data point, log record or span, with copies of its resource and scope) or a **metric** group. The runner splits and regroups; the envelope (`ID`, `From`) lives outside `pdata`.
+- Matching outputs to inputs: one input means any output came from it (0 outputs: `dropped`; 1: same ID, diff attributes; 2+: new IDs with `From` = input). In a metric group, outputs that match no single input get the whole group as `From`.
+- Adapters must pick the unit from config: e.g. transform/filter statements in metric context that look across data points (`HasAttrOnDatapoint`, `aggregate_on_attributes`), metricstransform `aggregate_labels` / `aggregate_label_values` / `combine` need the metric unit. A wrong declaration means silent drift, so adapters default to the metric unit when unsure.
+- Not yet supported: **series** units (need stepped time; e.g. deltatocumulative running totals), **trace** units (tail sampling; span IDs would give exact matching), **batch** units (groupbyattrs, dedup). Processors needing them give `unverified`.
+- Owner's processors: batch (pass-through), attributes, resource, filter, transform, metricstransform, deltatocumulative (item at a single instant), resourcedetection (custom node, source of values undecided), k8sattributes (custom node).
+
 ### Lineage and reports
 
 - **Structured events**: `{id, node, signal, attribute?, action, value?, simulated?, reason?, detail?}`.
@@ -206,6 +214,8 @@ Other deployment patterns and backends come later, as adapters.
 | 35 | Signals are collector `pdata` throughout (`pmetric`, `plog`, `ptrace`), including after the backend node | Own types; hybrid (pdata until the backend, own types after) | Real processors run without conversion; tying otelcov to collector versions fits decision 19's version pinning |
 | 36 | Dependencies are vendored by CI onto `deps/<branch>` branches | CI compiles everything; build Go/modules from GitHub mirrors; widen the network allowlist | Fast offline builds in the dev workspace; downloads stay checksum-verified against sum.golang.org |
 | 37 | Pin collector **0.135** (`pdata` v1.41.0, Go 1.24) — *owner to confirm 0.134 vs 0.135* | Latest collector (needs Go 1.26) | Match the deployed collectors' behavior |
+| 38 | Lineage across real processors: run them per item, with IDs and parents kept in an envelope outside `pdata` (Writer-monad style: each node returns outputs plus events) | Hidden ID attribute on each item; matching outputs to inputs by content | Exact matching, and processors can't strip or react to the metadata |
+| 39 | Processing units: **item** and **metric** (all data points of one metric in one resource and scope). Adapters choose the unit from their config; an output in a metric group that matches no single input gets the whole group as parents | `unverified` for anything needing more than one item; `unverified` now, units later | Covers metricstransform aggregations and cross-point transform/filter statements in the owner's configs |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
@@ -231,6 +241,7 @@ Treat these as open; ask before building on them.
 
 - **PR what-ifs on Deployment templates**: fixtures keep pod names and IPs stable. A real PR changes a template, so the checker must map recorded pods to their owner and apply the new template.
 - **LogQL evaluation**: when and how to evaluate line filters and parsers (`|= "error"`, `| json`); until then they're `unverified`.
+- **resourcedetection values**: recordings are taken before the processors, so detected attributes (`k8s.cluster.name`, `cloud.region`, `host.name`) aren't in them. Where the custom node gets them from is undecided.
 - **Snapshot metadata contents**: pod specs today; which other configs (collector config SHAs, ServiceMonitors) to store.
 - **Version pinning mechanism** for collector-contrib (builder manifest field, check against deployed version?).
 - **Repository conventions**: Go module path, CI setup, contribution guidelines.
