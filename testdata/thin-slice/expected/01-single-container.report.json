@@ -392,8 +392,7 @@
         "p1"
       ],
       "detail": {
-        "selector": "process_memory_usage_bytes{job=\"vllm\", k8s_container_name=\"vllm\"}",
-        "aggregation": "max by (k8s_namespace_name, k8s_pod_name)"
+        "expr": "max by (k8s_namespace_name, k8s_pod_name) (process_memory_usage_bytes{job=\"vllm\",k8s_container_name=\"vllm\"})"
       }
     },
     {
@@ -405,8 +404,7 @@
         "p2"
       ],
       "detail": {
-        "selector": "process_memory_usage_bytes{job=\"vllm\", k8s_container_name=\"vllm\"}",
-        "aggregation": "max by (k8s_namespace_name, k8s_pod_name)"
+        "expr": "max by (k8s_namespace_name, k8s_pod_name) (process_memory_usage_bytes{job=\"vllm\",k8s_container_name=\"vllm\"})"
       }
     },
     {
