@@ -1,10 +1,12 @@
 // Command otelcov checks OpenTelemetry monitoring coverage.
 //
-//	otelcov scenario [-root dir] [-json] scenario.yaml...
+//	otelcov scenario [-root dir] [-json] [-html report.html] scenario.yaml...
 //
 // It runs each scenario and prints, per requirement and pod, whether the pod's
-// signal reaches its alert and receiver, and why not when it doesn't. The exit
-// status is 1 when anything is not covered, 2 on errors.
+// signal reaches its alert and receiver, and why not when it doesn't. With
+// -html it also writes one page showing every scenario: a coverage matrix and
+// each pod's route through the stack. The exit status is 1 when anything is
+// not covered, 2 on errors.
 package main
 
 import (
@@ -16,7 +18,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/Anefu/otelcov/internal/htmlreport"
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/report"
 	"github.com/Anefu/otelcov/internal/scenario"
@@ -28,13 +32,14 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "scenario" {
-		fmt.Fprintln(stderr, "usage: otelcov scenario [-root dir] [-json] scenario.yaml...")
+		fmt.Fprintln(stderr, "usage: otelcov scenario [-root dir] [-json] [-html report.html] scenario.yaml...")
 		return 2
 	}
 	fs := flag.NewFlagSet("scenario", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	root := fs.String("root", "", "directory report paths are relative to (default: the scenario's parent directory)")
 	asJSON := fs.Bool("json", false, "print full reports as JSON")
+	htmlOut := fs.String("html", "", "also write a report page for all scenarios to this file")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -44,6 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	status := 0
+	page := htmlreport.Data{Generated: time.Now().UTC().Format(time.RFC3339)}
 	for _, path := range fs.Args() {
 		r := *root
 		if r == "" {
@@ -54,11 +60,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		rep, err := scenario.Report(context.Background(), s)
+		rep, flow, err := scenario.ReportWithFlow(context.Background(), s)
 		if err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", path, err)
 			return 2
 		}
+		page.Scenarios = append(page.Scenarios, htmlreport.Scenario{Report: rep, Flow: flow})
 		if *asJSON {
 			enc := json.NewEncoder(stdout)
 			enc.SetIndent("", "  ")
@@ -75,7 +82,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	if *htmlOut != "" {
+		if err := writePage(*htmlOut, page); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		fmt.Fprintf(stderr, "wrote %s\n", *htmlOut)
+	}
 	return status
+}
+
+func writePage(path string, d htmlreport.Data) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := htmlreport.Write(f, d); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func printText(w io.Writer, rep *report.Report) {

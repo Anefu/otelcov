@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>otelcov coverage report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap">
+<style>
+:root {
+  --paper: #fbfbfa;
+  --ink: #1a2230;
+  --muted: #5d6676;
+  --faint: #8b93a1;
+  --rule: #d9dde3;
+  --wash: #eef1f5;
+  --covered: #0f7a5f;
+  --broken: #c22d2a;
+  --unverified: #a3670f;
+  --simulated: #6646c2;
+  --focus: #2747c8;
+  --line: #1a2230;
+  --sans: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #12161d;
+    --ink: #e5e8ed;
+    --muted: #a0a8b6;
+    --faint: #6e7686;
+    --rule: #2b323d;
+    --wash: #1b212a;
+    --covered: #40bf98;
+    --broken: #f0665f;
+    --unverified: #e2a445;
+    --simulated: #a28cf2;
+    --focus: #8099ff;
+    --line: #e5e8ed;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.5 var(--sans);
+  font-variant-ligatures: no-contextual;
+  font-feature-settings: "calt" 0;
+}
+code, .mono { font-family: var(--mono); font-size: 0.9em; }
+a { color: inherit; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.page { max-width: 1240px; margin: 0 auto; padding: 32px 24px 80px; }
+.masthead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 24px; padding-bottom: 20px; border-bottom: 2px solid var(--ink); }
+.masthead h1 { margin: 0; font-size: 2.6rem; line-height: 1; font-weight: 700; letter-spacing: -0.02em; }
+.masthead p { margin: 0; color: var(--muted); }
+
+h2 { font-size: 1.35rem; line-height: 1.25; margin: 0; font-weight: 700; }
+.lede { margin: 6px 0 0; color: var(--muted); max-width: 70ch; }
+section { margin-top: 36px; }
+
+/* Coverage matrix */
+.matrix-wrap { margin-top: 18px; overflow-x: auto; }
+table.matrix { border-collapse: collapse; min-width: 100%; }
+.matrix th, .matrix td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+.matrix thead th { padding: 0 12px 10px 0; font-weight: 600; white-space: nowrap; }
+.matrix thead th .sub { display: block; font-weight: 400; color: var(--muted); font-size: 0.85rem; }
+.matrix tbody th { padding: 12px 20px 12px 0; font-weight: 600; white-space: nowrap; }
+.matrix tbody th .sub { display: block; font-weight: 400; color: var(--muted); font-size: 0.85rem; }
+.matrix td { padding: 6px 12px 6px 0; min-width: 200px; }
+.cell {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: 0; border-left: 4px solid var(--rule);
+  padding: 6px 10px 6px 12px;
+}
+.cell:hover { background: var(--wash); }
+.cell[aria-pressed="true"] { background: var(--wash); box-shadow: inset 0 0 0 2px var(--focus); }
+.cell .status { display: block; font-weight: 700; }
+.cell .real { display: block; font-size: 0.85rem; color: var(--muted); }
+.cell .real.disagree { color: var(--broken); font-weight: 600; }
+.cell .real.agree { color: var(--covered); }
+.cell.empty { cursor: default; color: var(--faint); border-left-color: transparent; }
+.s-covered { border-left-color: var(--covered); }
+.s-covered .status { color: var(--covered); }
+.s-simulated { border-left-color: var(--simulated); }
+.s-simulated .status { color: var(--simulated); }
+.s-broken { border-left-color: var(--broken); }
+.s-broken .status { color: var(--broken); }
+.s-unverified { border-left-color: var(--unverified); }
+.s-unverified .status { color: var(--unverified); }
+
+/* Selected route */
+.route-head { display: grid; gap: 4px; padding-top: 20px; border-top: 2px solid var(--ink); }
+.route-head h2 { font-size: 1.6rem; }
+.route-head .verdict { margin: 0; font-size: 1.1rem; }
+.route-head .verdict b { font-weight: 700; }
+.notes { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; max-width: 80ch; }
+.notes li { padding-left: 14px; border-left: 3px solid var(--rule); }
+.notes li.why { border-left-color: var(--broken); }
+.notes li.fix { border-left-color: var(--covered); }
+.notes li.warn { border-left-color: var(--unverified); }
+.notes li.sim { border-left-color: var(--simulated); }
+.notes li.real { border-left-color: var(--focus); }
+.notes li.real.agree { border-left-color: var(--covered); }
+.notes li.real.disagree { border-left-color: var(--broken); }
+.notes li.real.disagree b { color: var(--broken); }
+.notes .k { font-weight: 700; margin-right: 6px; }
+
+/* Strip map: one row per node, grouped by part of the stack */
+.strip { margin: 28px 0 0; padding: 0; list-style: none; }
+.group { display: grid; grid-template-columns: 120px 1fr; }
+.group + .group .gname, .group + .group .stations > li:first-child { border-top: 1px solid var(--rule); }
+.gname { padding: 14px 16px 0 0; font-weight: 700; color: var(--muted); overflow-wrap: anywhere; }
+.gname.id { font-family: var(--mono); font-weight: 500; font-size: 0.95rem; }
+.stations { margin: 0; padding: 0; list-style: none; }
+.station {
+  display: grid; grid-template-columns: 44px minmax(150px, 250px) 1fr minmax(90px, 140px);
+  column-gap: 14px; min-height: 52px;
+}
+.station .track { position: relative; }
+.station .track::before, .station .track::after {
+  content: ""; position: absolute; left: 20px; width: 4px;
+}
+.station .track::before { top: 0; height: 26px; }
+.station .track::after { top: 26px; bottom: 0; }
+.station.in-solid .track::before, .station.out-solid .track::after { background: var(--line); }
+.station.in-dashed .track::before, .station.out-dashed .track::after {
+  background: repeating-linear-gradient(to bottom, var(--faint) 0 5px, transparent 5px 10px); width: 2px; left: 21px;
+}
+.marker {
+  position: absolute; left: 13px; top: 17px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--paper); border: 3px solid var(--line); z-index: 1;
+}
+.off .marker { left: 18px; top: 22px; width: 8px; height: 8px; border-width: 2px; border-color: var(--rule); }
+.pass .marker { left: 16px; top: 20px; width: 12px; height: 12px; }
+.hit .marker { background: var(--line); }
+.unv .marker { border-color: var(--unverified); background: var(--unverified); }
+.sim .marker { box-shadow: 0 0 0 3px var(--paper), 0 0 0 6px var(--simulated); }
+.root .marker { box-shadow: 0 0 0 3px var(--paper), 0 0 0 6px var(--broken); }
+.brk .marker { border-radius: 2px; border-color: var(--broken); background: var(--broken); transform: rotate(45deg); }
+.side .marker { left: 34px; }
+.side .track .elbow { position: absolute; left: 22px; top: 25px; width: 14px; height: 2px; background: var(--line); }
+.station .name { padding-top: 13px; overflow-wrap: break-word; }
+.station .name .label { font-family: var(--mono); font-size: 0.92rem; }
+.station.kind-source .name .label, .station.kind-receiver .name .label, .station.kind-route .name .label { font-family: var(--sans); font-size: 1rem; }
+.station .name .note { display: block; color: var(--muted); font-size: 0.82rem; line-height: 1.35; }
+.off .name { color: var(--faint); }
+.station .events { padding: 12px 0 10px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.station .name { min-width: 0; }
+.ev code, .verdict code, .notes code { overflow-wrap: anywhere; }
+.ev { line-height: 1.4; }
+.ev .what { font-weight: 600; }
+.ev .why { display: block; color: var(--muted); font-size: 0.86rem; overflow-wrap: anywhere; }
+.ev.dropped .what, .ev.brk .what { color: var(--broken); }
+.ev.unverified .what { color: var(--unverified); }
+.ev.skipped .what { color: var(--broken); }
+.ev.simulated .what::after { content: " (simulated)"; color: var(--simulated); font-weight: 400; }
+.ev.root { padding-left: 10px; border-left: 3px solid var(--broken); }
+.ev.root .tag { color: var(--broken); font-weight: 700; margin-right: 6px; }
+.station details summary { cursor: pointer; color: var(--muted); font-size: 0.86rem; }
+.station .counts { padding-top: 15px; color: var(--faint); font-size: 0.82rem; text-align: right; line-height: 1.35; }
+.station .counts .bad { color: var(--broken); }
+.station .counts .warn { color: var(--unverified); }
+.edge-note { display: block; color: var(--unverified); font-size: 0.82rem; }
+
+.key { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 8px 22px; color: var(--muted); font-size: 0.85rem; }
+.key span { display: inline-flex; align-items: center; gap: 8px; }
+.key i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 3px solid var(--line); }
+.key i.hit { background: var(--line); }
+.key i.brk { border-radius: 2px; transform: rotate(45deg); background: var(--broken); border-color: var(--broken); }
+.key i.root { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--broken); }
+.key i.unv { border-color: var(--unverified); background: var(--unverified); }
+.key i.off { width: 8px; height: 8px; border-width: 2px; border-color: var(--rule); }
+
+.problems { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.problems li { font-size: 0.9rem; color: var(--muted); padding-left: 14px; border-left: 3px solid var(--rule); }
+.problems li.unverified, .problems li.fatal { border-left-color: var(--unverified); }
+.problems .sev { font-weight: 700; color: var(--ink); margin-right: 6px; }
+.empty-state { margin-top: 24px; color: var(--muted); }
+
+/* The route draws itself when a cell is picked. */
+.drawing .station .track::before, .drawing .station .track::after { transform-origin: top; animation: draw 220ms ease-out both; animation-delay: calc(var(--i) * 28ms); }
+.drawing .station .marker { animation: pop 200ms ease-out both; animation-delay: calc(var(--i) * 28ms + 60ms); }
+@keyframes draw { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes pop { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .drawing .station .track::before, .drawing .station .track::after, .drawing .station .marker { animation: none; }
+}
+
+@media (max-width: 760px) {
+  .page { padding: 20px 16px 60px; }
+  .masthead h1 { font-size: 2rem; }
+  .group { grid-template-columns: 1fr; }
+  .gname { padding: 12px 0 0; }
+  .station { grid-template-columns: 44px minmax(0, 1fr); }
+  .station .track { grid-row: 1 / span 3; }
+  .station .events, .station .counts { grid-column: 2; }
+  .station .events { padding-top: 0; }
+  .station .counts { text-align: left; padding: 0 0 10px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <h1>otelcov</h1>
+    <p id="meta"></p>
+  </header>
+  <section aria-labelledby="coverage-h">
+    <h2 id="coverage-h">Coverage</h2>
+    <p class="lede">Does each pod's signal reach the alert and receiver its requirement names? Pick a result to follow its route.</p>
+    <div class="matrix-wrap"><table class="matrix" id="matrix"></table></div>
+  </section>
+  <section id="route" aria-live="polite"></section>
+</div>
+<script id="otelcov-data" type="application/json">{{.}}</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("otelcov-data").textContent);
+  var scenarios = D.scenarios || [];
+
+  var STATUS = {
+    covered: { label: "Covered", cls: "s-covered" },
+    covered_simulated: { label: "Covered, simulated", cls: "s-simulated" },
+    not_covered: { label: "Not covered", cls: "s-broken" },
+    unverified: { label: "Unverified", cls: "s-unverified" }
+  };
+
+  // h builds an element. Text is always set as text, never parsed as HTML.
+  function h(tag, attrs) {
+    var el = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        var v = attrs[k];
+        if (v === undefined || v === null || v === false) return;
+        if (k === "class") el.className = v;
+        else if (k === "text") el.textContent = v;
+        else if (k.slice(0, 2) === "on") el.addEventListener(k.slice(2), v);
+        else el.setAttribute(k, v === true ? "" : v);
+      });
+    }
+    for (var i = 2; i < arguments.length; i++) add(el, arguments[i]);
+    return el;
+  }
+  function add(el, c) {
+    if (c === undefined || c === null || c === false) return;
+    if (Array.isArray(c)) { c.forEach(function (x) { add(el, x); }); return; }
+    el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  function code(s) { return h("code", { text: String(s) }); }
+  // prose renders otelcov's explanations: `quoted` spans become code.
+  function prose(s) {
+    return String(s || "").split("`").map(function (part, i) { return i % 2 ? code(part) : part; });
+  }
+  function key(req, pod) { return req + "|" + pod; }
+
+  // Per-scenario indexes.
+  scenarios.forEach(function (sc) {
+    var r = sc.report;
+    sc.byNode = {};
+    sc.counts = {};
+    (r.events || []).forEach(function (e) {
+      var c = sc.counts[e.node] || (sc.counts[e.node] = {});
+      c[e.action] = (c[e.action] || 0) + 1;
+    });
+    sc.entries = {};
+    (r.summary || []).forEach(function (e) { sc.entries[key(e.requirement, e.pod)] = e; });
+    sc.diag = {};
+    (r.diagnosis || []).forEach(function (d) { sc.diag[key(d.requirement, d.pod)] = d; });
+    sc.eventById = {};
+    (r.events || []).forEach(function (e) { sc.eventById[e.id] = e; });
+    sc.out = {}; sc.inn = {};
+    (sc.flow.edges || []).forEach(function (e) {
+      (sc.out[e.from] = sc.out[e.from] || []).push(e);
+      (sc.inn[e.to] = sc.inn[e.to] || []).push(e);
+    });
+  });
+
+  // Masthead.
+  var evalTimes = {};
+  scenarios.forEach(function (sc) { evalTimes[sc.report.eval_time] = true; });
+  var times = Object.keys(evalTimes);
+  var meta = [];
+  meta.push(scenarios.length === 1 ? "1 scenario" : scenarios.length + " scenarios");
+  if (times.length === 1) meta.push("evaluated at " + times[0]);
+  if (D.generated) meta.push("written " + D.generated);
+  document.getElementById("meta").textContent = meta.join(", ");
+
+  // Coverage matrix: one row per requirement and pod, one column per scenario.
+  var rows = [], seen = {}, reqs = {};
+  scenarios.forEach(function (sc) {
+    (sc.report.summary || []).forEach(function (e) {
+      reqs[e.requirement] = true;
+      var k = key(e.requirement, e.pod);
+      if (!seen[k]) { seen[k] = true; rows.push({ req: e.requirement, pod: e.pod }); }
+    });
+  });
+  var manyReqs = Object.keys(reqs).length > 1;
+  var cells = {};
+  var selected = null;
+
+  function renderMatrix() {
+    var table = document.getElementById("matrix");
+    if (!scenarios.length) {
+      table.replaceWith(h("p", { class: "empty-state", text: "This report has no scenarios. Run otelcov scenario with -html and at least one scenario file." }));
+      return;
+    }
+    var head = h("tr", null, h("th", { scope: "col", text: "Pod" }));
+    scenarios.forEach(function (sc) {
+      var probs = (sc.report.problems || []).length;
+      var sub = [];
+      if (times.length > 1) sub.push(sc.report.eval_time);
+      if (probs) sub.push(probs === 1 ? "1 input problem" : probs + " input problems");
+      if (sc.not_compared) sub.push("not compared with the real stack");
+      head.appendChild(h("th", { scope: "col" }, sc.report.scenario, sub.length ? h("span", { class: "sub", text: sub.join("; ") }) : null));
+    });
+    var body = h("tbody");
+    rows.forEach(function (row) {
+      var parts = row.pod.split("/");
+      var tr = h("tr", null, h("th", { scope: "row" },
+        parts.slice(1).join("/") || row.pod,
+        h("span", { class: "sub", text: (parts.length > 1 ? parts[0] : "") + (manyReqs ? ", " + row.req : "") })));
+      scenarios.forEach(function (sc, si) {
+        var e = sc.entries[key(row.req, row.pod)];
+        if (!e) { tr.appendChild(h("td", null, h("span", { class: "cell empty", text: "Not in this scenario" }))); return; }
+        var st = STATUS[e.status] || { label: e.status, cls: "" };
+        var t = sc.truth && sc.truth[key(row.req, row.pod)];
+        var real = null;
+        if (t) {
+          var v = t.verdict || "";
+          var cls = v.indexOf("agree") === 0 ? "agree" : v.indexOf("DISAGREE") === 0 ? "disagree" : "";
+          real = h("span", { class: "real " + cls, text: realLabel(v) });
+        }
+        var btn = h("button", {
+          type: "button", class: "cell " + st.cls, "aria-pressed": "false",
+          "aria-label": row.pod + " in " + sc.report.scenario + ": " + st.label,
+          onclick: function () { select(si, row, true); }
+        }, h("span", { class: "status", text: st.label }), real);
+        cells[si + "|" + key(row.req, row.pod)] = btn;
+        tr.appendChild(h("td", null, btn));
+      });
+      body.appendChild(tr);
+    });
+    table.appendChild(h("thead", null, head));
+    table.appendChild(body);
+  }
+
+  function realLabel(v) {
+    if (v.indexOf("agree") === 0) return "Real stack agrees";
+    if (v.indexOf("DISAGREE") === 0) return "Real stack disagrees";
+    if (v.indexOf("wait") === 0) return "Real stack: not settled yet";
+    return "Real stack: can't compare";
+  }
+
+  // route works out where an entry's signals went on the flow graph.
+  function route(sc, e) {
+    var r = sc.report;
+    var tracked = {};
+    (e.path || []).forEach(function (id) { tracked[id] = true; });
+    // Copies made where data fans out belong to the route too.
+    Object.keys(r.signals || {}).forEach(function (id) {
+      var s = r.signals[id];
+      if (s.node === "topology" && (s.from || []).some(function (f) { return tracked[f]; })) tracked[id] = true;
+    });
+    var events = {};
+    (r.events || []).forEach(function (ev) {
+      if (!tracked[ev.signal] || ev.node === "topology") return;
+      (events[ev.node] = events[ev.node] || []).push(ev);
+    });
+    var visited = {}, created = {};
+    Object.keys(events).forEach(function (n) { visited[n] = true; });
+    (e.path || []).forEach(function (id) { var s = r.signals[id]; if (s) { visited[s.node] = true; created[s.node] = true; } });
+    var receiver = null;
+    (events["alertmanager/route"] || []).forEach(function (ev) {
+      if (ev.action === "routed" && ev.detail && ev.detail.receiver) {
+        receiver = "receiver/" + ev.detail.receiver;
+        visited[receiver] = true;
+      }
+    });
+    var nodes = sc.flow.nodes || [];
+    var fwd = reach(Object.keys(visited), sc.out, "to");
+    var back = reach(Object.keys(visited), sc.inn, "from");
+    var final = null;
+    if (e.broken_at && nodeIndex(sc, e.broken_at) >= 0) final = e.broken_at;
+    else if (receiver && e.status !== "not_covered") final = receiver;
+    else nodes.forEach(function (n) { if (visited[n.id]) final = n.id; });
+    var toFinal = final ? reach([final], sc.inn, "from") : {};
+    var state = {};
+    nodes.forEach(function (n) {
+      var onRoute = visited[n.id] || (fwd[n.id] && back[n.id]);
+      if (!onRoute) state[n.id] = "off";
+      else if (toFinal[n.id]) state[n.id] = "main";
+      else state[n.id] = "side";
+    });
+    // The break is where the route ends, even when nothing reached it.
+    if (final) state[final] = "main";
+    return { events: events, state: state, final: final, receiver: receiver, created: created };
+  }
+  function reach(starts, adj, dir) {
+    var seen = {}, stack = starts.slice();
+    starts.forEach(function (s) { seen[s] = true; });
+    while (stack.length) {
+      var n = stack.pop();
+      (adj[n] || []).forEach(function (e) {
+        var m = e[dir];
+        if (!seen[m]) { seen[m] = true; stack.push(m); }
+      });
+    }
+    return seen;
+  }
+  function nodeIndex(sc, id) {
+    var nodes = sc.flow.nodes || [];
+    for (var i = 0; i < nodes.length; i++) if (nodes[i].id === id) return i;
+    return -1;
+  }
+
+  function signalText(sc, id) {
+    var s = sc.report.signals[id];
+    if (!s) return id;
+    if (s.labels) {
+      var name = s.labels.__name__ || s.name || "";
+      var ls = Object.keys(s.labels).filter(function (k) { return k !== "__name__"; }).sort()
+        .map(function (k) { return k + "=\"" + s.labels[k] + "\""; });
+      return id + ": " + name + "{" + ls.join(", ") + "}";
+    }
+    return id + ": " + (s.name || s.kind);
+  }
+
+  function eventView(sc, ev, marks, kind) {
+    var a = ev.attribute ? code(ev.attribute) : null;
+    var val = ev.value !== undefined && ev.value !== null ? [" = ", code(ev.value)] : null;
+    var what, why = ev.reason || "";
+    switch (ev.action) {
+      case "set": what = ["Sets ", a, val]; break;
+      case "kept": what = ["Keeps ", a, val]; break;
+      case "removed": what = ["Removes ", a]; break;
+      case "skipped":
+        what = kind === "backend" ? ["No label from ", a] : ["Doesn't set ", a];
+        if (ev.detail && ev.detail.would_set !== undefined) what.push([" (would set ", code(ev.detail.would_set), ")"]);
+        break;
+      case "associated": what = ["Matched to its pod"]; break;
+      case "attributed": what = ["Attributed to its pod and container"]; break;
+      case "derived": what = ["Becomes ", code(signalText(sc, ev.signal))]; break;
+      case "dropped": what = ["Drops it"]; break;
+      case "routed": what = ["Routes ", code(ev.signal), " to ", code(ev.detail && ev.detail.receiver || "?")]; break;
+      case "exported": what = ["Copy ", code(ev.signal), " leaves the modeled system"]; break;
+      case "unverified": what = ["Can't verify this"]; break;
+      default: what = [ev.action, a ? [" ", a] : null];
+    }
+    var cls = "ev " + ev.action + (ev.simulated ? " simulated" : "") + (marks.root === ev.id ? " root" : "");
+    return h("div", { class: cls, title: ev.id },
+      marks.root === ev.id ? h("span", { class: "tag", text: "Root cause" }) : null,
+      h("span", { class: "what" }, what),
+      why ? h("span", { class: "why" }, prose(why)) : null);
+  }
+
+  function countsView(sc, id) {
+    var c = sc.counts[id];
+    if (!c) return h("div", { class: "counts" });
+    var order = ["dropped", "unverified", "skipped", "set", "removed", "kept", "derived", "routed", "exported", "associated", "attributed"];
+    var parts = [];
+    order.forEach(function (a) {
+      if (!c[a]) return;
+      var cls = a === "dropped" ? "bad" : a === "unverified" ? "warn" : "";
+      parts.push(h("span", { class: cls, text: c[a] + " " + a }));
+    });
+    var out = [];
+    parts.forEach(function (p, i) { if (i) out.push(h("br")); out.push(p); });
+    return h("div", { class: "counts", title: "Events at this node, for every signal in the scenario" }, out);
+  }
+
+  function select(si, row, animate) {
+    var sc = scenarios[si];
+    var e = sc.entries[key(row.req, row.pod)];
+    if (!e) return;
+    if (selected) { var old = cells[selected]; if (old) old.setAttribute("aria-pressed", "false"); }
+    selected = si + "|" + key(row.req, row.pod);
+    if (cells[selected]) cells[selected].setAttribute("aria-pressed", "true");
+    renderRoute(sc, e, row, animate);
+    try { history.replaceState(null, "", "#" + encodeURIComponent(selected)); } catch (err) { /* file:// may refuse */ }
+  }
+
+  function renderRoute(sc, e, row, animate) {
+    var sec = document.getElementById("route");
+    sec.textContent = "";
+    var st = STATUS[e.status] || { label: e.status };
+    var rt = route(sc, e);
+    var d = sc.diag[key(e.requirement, e.pod)];
+    var marks = { root: d ? d.root_cause : null };
+    var unv = {}, sim = {};
+    (e.unverified_by || []).forEach(function (id) { unv[id] = true; });
+    (e.simulated_by || []).forEach(function (id) { sim[id] = true; });
+
+    var verdict;
+    if (e.status === "not_covered") verdict = ["Not covered: the route breaks at ", code(e.broken_at || "?"), "."];
+    else if (e.status === "unverified" && e.broken_at) verdict = ["Unverified: nothing to follow from ", code(e.broken_at), "."];
+    else if (e.status === "unverified") verdict = ["Unverified: the route reaches ", code(e.receiver || "?"), ", but otelcov can't vouch for every step."];
+    else if (e.status === "covered_simulated") verdict = ["Covered, if the simulated changes deploy as written: reaches ", code(e.receiver || "?"), "."];
+    else verdict = ["Covered: reaches ", code(e.receiver || "?"), "."];
+
+    var notes = h("ul", { class: "notes" });
+    if (d) {
+      notes.appendChild(h("li", { class: "why" }, h("span", { class: "k", text: "Why" }), prose(d.explanation)));
+      (d.hints || []).forEach(function (x) { notes.appendChild(h("li", { class: "fix" }, h("span", { class: "k", text: "Fix" }), prose(x))); });
+    }
+    if (e.reason) notes.appendChild(h("li", { class: "warn" }, prose(e.reason)));
+    (e.unverified_by || []).forEach(function (id) {
+      var ev = sc.eventById[id];
+      if (ev) notes.appendChild(h("li", { class: "warn" }, h("span", { class: "k", text: "Unverified at" }), code(ev.node), ": ", prose(ev.reason)));
+    });
+    (e.simulated_by || []).forEach(function (id) {
+      var ev = sc.eventById[id];
+      if (ev) notes.appendChild(h("li", { class: "sim" }, h("span", { class: "k", text: "Simulated" }), code(ev.attribute || ""), " by " + ev.node + (ev.reason ? ": " + ev.reason : "")));
+    });
+    var t = sc.truth && sc.truth[key(e.requirement, e.pod)];
+    if (t) {
+      var vcls = t.verdict.indexOf("agree") === 0 ? " agree" : t.verdict.indexOf("DISAGREE") === 0 ? " disagree" : "";
+      notes.appendChild(h("li", { class: "real" + vcls }, h("span", { class: "k", text: "Real stack" }), t.real + ". ", h("b", { text: t.verdict })));
+    }
+    else if (sc.not_compared) notes.appendChild(h("li", { class: "real" }, h("span", { class: "k", text: "Real stack" }), "Not compared: " + sc.not_compared + "."));
+
+    sec.appendChild(h("header", { class: "route-head" },
+      h("h2", null, row.pod),
+      h("p", { class: "verdict" }, h("b", { text: sc.report.scenario }), ", requirement ", code(e.requirement), ". ", verdict)));
+    if (notes.childNodes.length) sec.appendChild(notes);
+
+    // The strip map.
+    var nodes = sc.flow.nodes || [];
+    var mainIdx = [];
+    nodes.forEach(function (n, i) { if (rt.state[n.id] === "main") mainIdx.push(i); });
+    var first = mainIdx.length ? mainIdx[0] : -1;
+    var last = rt.final ? nodeIndex(sc, rt.final) : (mainIdx.length ? mainIdx[mainIdx.length - 1] : -1);
+    var broken = e.status === "not_covered" || (e.status === "unverified" && !!e.broken_at);
+    var breakIdx = broken ? last : -1;
+    var rootNode = d && sc.eventById[d.root_cause] ? sc.eventById[d.root_cause].node : null;
+
+    var strip = h("ol", { class: "strip" + (animate ? " drawing" : ""), "aria-label": "Route of " + row.pod + " through the stack" });
+    var group = null, list = null;
+    nodes.forEach(function (n, i) {
+      if (!group || group.name !== n.group) {
+        list = h("ol", { class: "stations" });
+        var named = GROUPS[n.group];
+        group = { name: n.group, el: h("li", { class: "group" }, h("div", { class: named ? "gname" : "gname id", text: named || n.group }), list) };
+        strip.appendChild(group.el);
+      }
+      var s = rt.state[n.id];
+      var evs = rt.events[n.id] || [];
+      var cls = ["station", "kind-" + n.kind, s === "off" ? "off" : s === "side" ? "side" : ""];
+      if (first >= 0 && i > first && i <= last) cls.push("in-solid");
+      if (first >= 0 && i >= first && i < last) cls.push("out-solid");
+      if (broken && i > last) cls.push("in-dashed");
+      if (broken && i >= last && i < nodes.length - 1) cls.push("out-dashed");
+      if (i === breakIdx) cls.push("brk");
+      else if (n.id === rootNode) cls.push("root");
+      if (s !== "off" && i !== breakIdx) cls.push(evs.length || rt.created[n.id] || rt.receiver === n.id ? "hit" : "pass");
+      if (evs.some(function (ev) { return unv[ev.id] || ev.action === "unverified"; })) cls.push("unv");
+      if (evs.some(function (ev) { return sim[ev.id] || ev.simulated; })) cls.push("sim");
+
+      var inEdgeNote = null;
+      (sc.inn[n.id] || []).forEach(function (ed) { if (ed.note && rt.state[ed.from] !== "off") inEdgeNote = ed.note; });
+
+      var evViews = [];
+      if (n.id === "source/otlp-replay" && e.path && e.path[0]) {
+        var src = sc.report.signals[e.path[0]];
+        if (src) evViews.push(h("div", { class: "ev" },
+          h("span", { class: "what" }, "Recorded ", code(e.path[0] + ": " + (src.name || ""))),
+          h("span", { class: "why", text: (src.origin ? src.origin + ". " : "") + resourceText(src.resource) })));
+      }
+      var shown = evs.slice(0, 6).map(function (ev) { return eventView(sc, ev, marks, n.kind); });
+      evViews = evViews.concat(shown);
+      if (evs.length > 6) {
+        evViews.push(h("details", null, h("summary", { text: (evs.length - 6) + " more" }),
+          evs.slice(6).map(function (ev) { return eventView(sc, ev, marks, n.kind); })));
+      }
+      if (n.kind === "receiver" && rt.receiver === n.id) evViews.push(h("div", { class: "ev" }, h("span", { class: "what", text: "Paged" })));
+      if (i === breakIdx && !evs.some(function (ev) { return ev.action === "dropped"; }) && e.status === "not_covered") {
+        evViews.push(h("div", { class: "ev brk" }, h("span", { class: "what", text: "The route ends here" })));
+      }
+
+      var li = h("li", { class: cls.join(" "), style: "--i:" + i },
+        h("div", { class: "track", "aria-hidden": "true" }, s === "side" ? h("span", { class: "elbow" }) : null, h("span", { class: "marker" })),
+        h("div", { class: "name" }, h("span", { class: "label" }, breakable(n.label)),
+          n.note ? h("span", { class: "note", text: n.note }) : null,
+          inEdgeNote ? h("span", { class: "edge-note", text: "Join can't be trusted: " + inEdgeNote }) : null),
+        h("div", { class: "events" }, evViews),
+        countsView(sc, n.id));
+      list.appendChild(li);
+    });
+    sec.appendChild(strip);
+
+    sec.appendChild(h("div", { class: "key", "aria-label": "Key" },
+      h("span", null, h("i", { class: "hit" }), "Acted on this pod's signal"),
+      h("span", null, h("i"), "Passed through"),
+      h("span", null, h("i", { class: "brk" }), "Route breaks"),
+      h("span", null, h("i", { class: "root" }), "Root cause"),
+      h("span", null, h("i", { class: "unv" }), "Unverified"),
+      h("span", null, h("i", { class: "off" }), "Not on this route")));
+
+    var probs = sc.report.problems || [];
+    if (probs.length) {
+      sec.appendChild(h("h3", { class: "lede", text: "Input problems in " + sc.report.scenario }));
+      sec.appendChild(h("ul", { class: "problems" }, probs.map(function (p) {
+        return h("li", { class: p.severity }, h("span", { class: "sev", text: p.severity }), code(p.where), ": ", prose(p.message));
+      })));
+    }
+  }
+
+  // breakable lets long IDs wrap after ":", "/", "_" or "." instead of mid-word.
+  function breakable(s) {
+    var out = [], cur = "";
+    String(s).split("").forEach(function (ch) {
+      cur += ch;
+      if (":/_.".indexOf(ch) >= 0) { out.push(cur, h("wbr")); cur = ""; }
+    });
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  // Groups otelcov names; collectors and backends keep the user's names.
+  var GROUPS = { source: "Source", rules: "Rules", alerting: "Alerting", receivers: "Receivers" };
+  function resourceText(res) {
+    if (!res) return "";
+    return Object.keys(res).sort().map(function (k) { return k + "=" + res[k]; }).join(", ");
+  }
+
+  renderMatrix();
+
+  // Start on the pod in the URL, else the first result that isn't covered.
+  var start = null;
+  if (location.hash) {
+    var want = decodeURIComponent(location.hash.slice(1));
+    var p = want.indexOf("|");
+    var si0 = parseInt(want.slice(0, p), 10), k0 = want.slice(p + 1);
+    if (scenarios[si0] && scenarios[si0].entries[k0]) {
+      var e0 = scenarios[si0].entries[k0];
+      start = [si0, { req: e0.requirement, pod: e0.pod }];
+    }
+  }
+  if (!start) {
+    scenarios.some(function (sc, si) {
+      return rows.some(function (row) {
+        var e = sc.entries[key(row.req, row.pod)];
+        if (e && e.status !== "covered") { start = [si, row]; return true; }
+        return false;
+      });
+    });
+  }
+  if (!start && rows.length) start = [0, rows[0]];
+  if (start) select(start[0], start[1], false);
+})();
+</script>
+</body>
+</html>

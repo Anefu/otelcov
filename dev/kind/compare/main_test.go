@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Anefu/otelcov/internal/htmlreport"
 	"github.com/Anefu/otelcov/internal/report"
 )
 
@@ -58,10 +59,11 @@ func TestCompare(t *testing.T) {
 		podExists: func(context.Context, string, string) (bool, error) { return true, nil },
 	}
 	var out bytes.Buffer
+	page := &htmlreport.Data{}
 	disagree, err := run(context.Background(), o, []string{
 		filepath.Join(fixtures, "scenarios/01-baseline.yaml"),
 		filepath.Join(fixtures, "scenarios/02-team-condition-pr.yaml"),
-	}, &out)
+	}, &out, page)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +81,24 @@ func TestCompare(t *testing.T) {
 	}
 	if !disagree {
 		t.Error("vllm-embed disagrees: want disagree reported")
+	}
+
+	// The page has both scenarios: 01 with the real stack's answers, 02 with
+	// why it wasn't compared.
+	if len(page.Scenarios) != 2 {
+		t.Fatalf("want 2 scenarios on the page, got %d", len(page.Scenarios))
+	}
+	chat := page.Scenarios[0].Truth[htmlreport.TruthKey("vllm-memory-watched", "inference/vllm-chat-6f9d8b7c4d-k2x7p")]
+	if chat.Verdict != "agree" || !strings.Contains(chat.Real, "inference-pager") {
+		t.Errorf("truth for vllm-chat: %+v", chat)
+	}
+	if page.Scenarios[1].Truth != nil || !strings.Contains(page.Scenarios[1].NotCompared, "gateway config differs") {
+		t.Errorf("02: %+v", page.Scenarios[1].NotCompared)
+	}
+	if os.Getenv("OTELCOV_KEEP_PAGE") != "" {
+		f, _ := os.Create(os.Getenv("OTELCOV_KEEP_PAGE"))
+		htmlreport.Write(f, *page)
+		f.Close()
 	}
 }
 

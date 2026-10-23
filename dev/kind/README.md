@@ -52,6 +52,8 @@ Then, in the Tilt UI (or `tilt trigger <name>`), run the three manual resources 
    Each also warns about pod fields otelcov doesn't know. That's expected: kind runs a newer Kubernetes than the 1.32 API types otelcov is built with.
 3. **compare** checks otelcov's answer against Mimir and Alertmanager for each pod. It only does this for scenarios whose collector configs are the ones deployed right now (read from the ConfigMaps) and skips the others. `agree` is what you want. `wait` means the alert is pending or not routed yet.
 
+Both steps also write a report page into `captured/`. The **reports** resource serves them, with links in Tilt's UI: *otelcov report* (`report.html`) and *real vs predicted* (`compare.html`, which is the same page with the real stack's answer in each compared cell). Pick any cell to see that pod's route through the stack: what each node did to its signal, where the route breaks, and the root cause.
+
 ## Check a what-if for real
 
 otelcov predicts a PR's effect from the old recording. To check that prediction, deploy the PR and compare again:

@@ -6,9 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/prometheus/model/labels"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/Anefu/otelcov/internal/alerting"
+	"github.com/Anefu/otelcov/internal/flowgraph"
 	"github.com/Anefu/otelcov/internal/graph"
 	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/lineage"
@@ -35,6 +37,8 @@ type Result struct {
 	// Problems found in the inputs: unknown pod fields, topology validation
 	// (none fatal).
 	Problems []topology.Problem
+	// Flow is how the components connect, with lineage node names as IDs.
+	Flow flowgraph.Graph
 
 	pods []corev1.Pod
 }
@@ -100,8 +104,13 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		return nil, err
 	}
 
-	res := &Result{Log: log, Series: map[string][]unit.Metric{}, Problems: append(problems, val.Problems...), pods: pods}
+	flow, err := topology.Flow(topo, val)
+	if err != nil {
+		return nil, err
+	}
+	res := &Result{Log: log, Series: map[string][]unit.Metric{}, Problems: append(problems, val.Problems...), Flow: flow, pods: pods}
 	for _, name := range topology.Names(topo.Backends) {
+		res.Flow.AddNode(topology.BackendFlowNode(name, topo.Backends[name].Type))
 		limits, err := mimir.Load(topo.Backends[name].Config)
 		if err != nil {
 			return nil, fmt.Errorf("backend %s: %w", name, err)
@@ -116,6 +125,7 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	// Consumers: rules read a backend; Alertmanager reads rules.
 	ruleIDs, alertIDs := lineage.NewIDs("r"), lineage.NewIDs("a")
 	alertsBy := map[string][]alerting.Alert{}
+	alertNames := map[string][]string{} // flow node IDs of each rules consumer's alerts
 	for _, name := range topology.Names(topo.Consumers) {
 		c := topo.Consumers[name]
 		if c.Type != "prometheus-rules" {
@@ -129,6 +139,7 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
+		alertNames[name] = addRules(&res.Flow, topology.BackendNode(c.Reads), set)
 		series, err := graph.Process(ctx, []graph.MetricsNode{rn}, res.Series[c.Reads], log)
 		if err != nil {
 			return nil, err
@@ -157,6 +168,15 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
+		res.Flow.AddNode(flowgraph.Node{ID: route.Name, Group: "alerting", Label: "Alertmanager routes", Kind: flowgraph.Route})
+		for _, a := range alertNames[c.Reads] {
+			res.Flow.AddEdge(flowgraph.Edge{From: a, To: route.Name})
+		}
+		for _, rcv := range router.Receivers() {
+			id := ReceiverNode(rcv)
+			res.Flow.AddNode(flowgraph.Node{ID: id, Group: "receivers", Label: rcv, Kind: flowgraph.Receiver})
+			res.Flow.AddEdge(flowgraph.Edge{From: route.Name, To: id})
+		}
 		if err := graph.Record(log, route.Name, router.Process(alertsBy[c.Reads]), nil, nil); err != nil {
 			return nil, err
 		}
@@ -164,17 +184,75 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	return res, nil
 }
 
+// ReceiverNode is a receiver's node ID in the flow graph. Lineage has no
+// receiver nodes: routed events name the receiver in their detail.
+func ReceiverNode(name string) string { return "receiver/" + name }
+
+// addRules adds a rules consumer's recording and alerting rules to the flow,
+// each fed by the backend or by the recording rules it selects. It returns
+// the alerts' node IDs.
+func addRules(g *flowgraph.Graph, backend string, set *rulefile.Rules) []string {
+	ordered, err := rulefile.OrderRecording(set.Recording)
+	if err != nil {
+		ordered = set.Recording
+	}
+	recorded := map[string]bool{}
+	for _, r := range ordered {
+		recorded[r.Record] = true
+	}
+	// A rule reads the recording rules its __name__ matchers match, and the
+	// backend for anything else (no name matcher, or one that isn't exactly a
+	// recorded name).
+	inputs := func(id string, ms []*labels.Matcher) {
+		fromBackend := len(ms) == 0
+		for _, m := range ms {
+			if m.Type == labels.MatchEqual && recorded[m.Value] {
+				g.AddEdge(flowgraph.Edge{From: "rule/" + m.Value, To: id})
+				continue
+			}
+			for _, r := range ordered {
+				if m.Matches(r.Record) {
+					g.AddEdge(flowgraph.Edge{From: "rule/" + r.Record, To: id})
+				}
+			}
+			fromBackend = true
+		}
+		if fromBackend {
+			g.AddEdge(flowgraph.Edge{From: backend, To: id})
+		}
+	}
+	for _, r := range ordered {
+		id := "rule/" + r.Record
+		g.AddNode(flowgraph.Node{ID: id, Group: "rules", Label: r.Record, Kind: flowgraph.Rule})
+		inputs(id, rulefile.SelectedNames(r.Expr))
+	}
+	var alerts []string
+	for _, a := range set.Alerting {
+		id := "alert/" + a.Alert
+		g.AddNode(flowgraph.Node{ID: id, Group: "alerting", Label: a.Alert, Kind: flowgraph.Alert})
+		inputs(id, rulefile.SelectedNames(a.Expr))
+		alerts = append(alerts, id)
+	}
+	return alerts
+}
+
 // Report runs the scenario and answers its requirements.
 func Report(ctx context.Context, s *Scenario) (*report.Report, error) {
+	rep, _, err := ReportWithFlow(ctx, s)
+	return rep, err
+}
+
+// ReportWithFlow is Report, plus the scenario's flow graph.
+func ReportWithFlow(ctx context.Context, s *Scenario) (*report.Report, flowgraph.Graph, error) {
 	res, err := Run(ctx, s)
 	if err != nil {
-		return nil, err
+		return nil, flowgraph.Graph{}, err
 	}
 	reqs, err := requirements.Load(s.Requirements)
 	if err != nil {
-		return nil, fmt.Errorf("requirements: %w", err)
+		return nil, flowgraph.Graph{}, fmt.Errorf("requirements: %w", err)
 	}
 	rep := report.Build(s.Name, s.EvalTime, res.Log, reqs, res.pods)
 	rep.Problems = res.Problems
-	return rep, nil
+	return rep, res.Flow, nil
 }
