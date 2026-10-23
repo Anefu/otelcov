@@ -44,9 +44,9 @@ As far as we could find, no existing tool follows one workload's signal across c
   - Baseline: both pods covered, and compare agreed.
   - Gateway team-condition PR, predicted from the old recording and then deployed: both pods not covered. The real stack broke at the same place: series reach Mimir, but the rule output disappears. compare agreed.
   - Apps reached their node's agent with their own pod IP, and the resourcedetection capture gave real per-node values.
-  - **The motivating bug, for real**: the apps what-if that drops `OTEL_RESOURCE_ATTRIBUTES` from vllm-embed (the pod with a sidecar), predicted and then deployed. otelcov: vllm-embed not covered, broken at the recording rule, root cause `agent/k8sattributes` (2 containers, and neither `container.id` nor `k8s.container.name` on the resource); vllm-chat still covered. The real stack: vllm-embed's series reach Mimir without `k8s_container_name`, no rule output, no alert. compare agreed for both pods, before (01) and after (04). So the real k8sattributes (collector 0.135.0 at the time) behaves as otelcov's custom node says.
+  - **The motivating bug, for real**: the apps what-if that drops `OTEL_RESOURCE_ATTRIBUTES` from vllm-embed (the pod with a sidecar), deployed and captured. otelcov: vllm-embed not covered, broken at the recording rule, root cause `agent/k8sattributes` (2 containers, and neither `container.id` nor `k8s.container.name` on the resource); vllm-chat still covered. The real stack: vllm-embed's series reach Mimir without `k8s_container_name`, no rule output, no alert. compare agreed for both pods, before (01) and after (04). So the real k8sattributes (collector 0.135.0 at the time) behaves as otelcov's custom node says.
   - Earlier, in a local rehearsal with the real binaries, otelcov's predicted series labels matched Mimir 3.2.3's exactly, `target_info` included.
-- The `testdata/` fixtures have **not** yet been run through the real tools (promtool, amtool, otelcol validate).
+- The `testdata/` fixtures pass the real tools: `promtool` 3.5.0 (`check rules`, and the thin slice's rule unit test), `amtool` 0.28.1 (`check-config`, both routes) and `otelcol-contrib validate` 0.134.1.
 
 ## Scope of the first release
 
@@ -431,7 +431,7 @@ sha256sum testdata/agent-gateway/collector/*.yaml
 ### Fixtures
 
 ```sh
-# Real-tool checks of the fixtures (not run yet)
+# Real-tool checks of the fixtures (they pass; see Status)
 cd testdata/thin-slice
 promtool check rules rules/inference.rules.yaml
 (cd promtool && promtool test rules inference.rules.test.yaml)

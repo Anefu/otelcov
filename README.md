@@ -4,7 +4,14 @@ Coverage and lineage for OpenTelemetry monitoring stacks.
 
 otelcov replays recorded telemetry through your collectors, backends, rules, alerts and dashboards to show which workloads are actually watched, explain where coverage breaks, and check pull requests before they merge.
 
-> **Status: early implementation.** Metrics work end to end, from recorded OTLP through daemonset agents and a gateway (real collector-contrib processors), Mimir, recording rules, alerts and Alertmanager routing, against the test fixtures in [`testdata/`](testdata/). It hasn't been run against a real cluster yet. The design and its decisions live in [AGENTS.md](AGENTS.md).
+> **Status: early, not production-ready.** Metrics work end to end: recorded OTLP through daemonset agents and a gateway (real collector-contrib processors), Mimir, recording rules, alerts and Alertmanager routing. On a local [kind cluster](dev/kind/) running that stack, otelcov's answers matched what Mimir and Alertmanager actually did: for the baseline, for a gateway pull request predicted before it was deployed, and for the sidecar bug below. It hasn't been pointed at a real staging stack yet, some common collector settings aren't modeled (k8sattributes `filter`, for one), and logs, traces and dashboards aren't covered. The design and its decisions live in [AGENTS.md](AGENTS.md).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/report-page-dark.png">
+  <img src="docs/report-page.png" width="800" alt="otelcov's report page for the sidecar bug on the kind cluster: vllm-chat is covered and vllm-embed is not, and the real stack agrees on both. For vllm-embed, the route breaks at the recording rule, which needs a k8s_container_name label. The root cause is ringed at the agent's k8sattributes processor: the pod has two containers and the resource has neither container.id nor k8s.container.name. The fix is to set k8s.container.name=vllm in OTEL_RESOURCE_ATTRIBUTES.">
+</picture>
+
+*The report page for the sidecar bug, from the kind lab: otelcov's answer per pod, why vllm-embed isn't covered, the fix, and what the real stack did. Below the verdict, the pod's route through the stack, with the root cause ringed.*
 
 ## The problem
 
