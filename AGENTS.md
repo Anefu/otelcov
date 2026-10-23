@@ -35,10 +35,9 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 ## Status
 
-Early implementation. Built and tested against the thin-slice golden reports: every node of the thin slice: replay, sdk-env, k8sattributes, Mimir backend, recording rules, alerting rules and Alertmanager routing (plus batch as a pass-through). Report building (summary per requirement, diagnosis) is next. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
+**The thin slice works end to end**: replay, sdk-env, k8sattributes, Mimir backend, recording rules, alerting rules, Alertmanager routing and the report (summary per requirement, diagnosis). `otelcov scenario` runs scenarios from the command line. All four thin-slice scenarios match their golden reports exactly. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
 
 - `testdata/thin-slice/`: hand-written fixtures for the first end-to-end slice (4 scenarios, golden reports). See its README.
-- `scripts/check_fixtures.py`: stopgap consistency check for the fixtures; delete once Go tests exist.
 - The fixtures have **not** yet been run through the real tools (promtool, amtool, otelcol validate). See Commands.
 
 ## Scope of the first release
@@ -173,7 +172,9 @@ Other deployment patterns and backends come later, as adapters.
 - **Series keep all their samples** through the backend and rules, so range functions see the recorded history.
 - **batch**: pass-through. Any other processor type: `Unsupported` (data passes through, every item `unverified`).
 - Scenario runs: `internal/scenario.Run` wires replay → sdk-env → the collector pipeline's processors → backend → recording rules (metrics graph), then alerting rules and routing as separate stages logged with `graph.Record`.
-- **Golden tests** (`internal/scenario/golden_test.go`) compare only nodes listed in `implemented`, in order, ignoring event IDs. Add a node there when it's built.
+- **Golden tests** (`internal/scenario/golden_test.go`) compare whole reports exactly, event IDs included. To change a golden report deliberately: `go test ./internal/scenario -update`, then review the diff and note why in `testdata/thin-slice/README.md`.
+- **Report** (`internal/report`): see Lineage and reports.
+- **CLI** (`cmd/otelcov`): `otelcov scenario [-root dir] [-json] scenario.yaml...`; exit status 1 if anything is not covered, 2 on errors.
 
 ### Snapshot metadata
 
@@ -186,7 +187,13 @@ Other deployment patterns and backends come later, as adapters.
 - Actions: `attributed`, `associated`, `set`, `kept`, `removed`, `skipped`, `derived`, `dropped`, `routed`, `unverified` (the node can't tell what really happens; reason says why).
 - **Record non-events** (`skipped`): in the motivating bug, the root cause is something that *didn't* happen.
 - Report sections: `summary` (per requirement and pod: status, path, receiver or `broken_at`), `diagnosis` (event chain from the break back to the root cause, plus hints), `signals`, `events`.
-- Statuses: `covered`, `covered_simulated` (path needs an attribute only sdk-env provided; listed in `simulated_by`), `not_covered`, `unverified`.
+- Statuses: `covered`, `covered_simulated` (path needs an attribute only sdk-env provided; listed in `simulated_by`), `not_covered`, `unverified` (no telemetry from the pod, or an `unverified` event on the path; listed in `unverified_by`).
+- How the report answers a requirement (`internal/report`):
+  - **Sources**: recorded signals of the requirement's metric that sdk-env attributed to the pod and container (or, without attribution and without a required container, that k8sattributes associated with the pod). None: `unverified`, `broken_at: source/otlp-replay`.
+  - **Forward search** through `from` links to the requirement's alert, routed to its receiver.
+  - **Relevance**: attribute-level events only count if the path *needs* the attribute: it's promoted to a label that a selector matcher (one that doesn't match the empty string) or a route matcher on the path requires (`job` ← `service.name`, `instance` ← `service.instance.id`). So `k8s.pod.uid` being simulated doesn't make a path `covered_simulated` unless something needs it.
+  - **Breaks**: the deepest non-`target_info` signal with a `dropped` event (else `unverified`) gives `broken_at`. An alert routed elsewhere breaks at `alertmanager/route`.
+  - **Diagnosis**: from the drop, the missing label → the backend's `skipped` promotion of the attribute it comes from (label names via Prometheus's own `LabelNamer`) → the last collector or sdk-env event on the recorded signal that skipped, removed or couldn't verify that attribute. Explanations are generated from those events; hints are specific for known root causes (k8sattributes container identification, sdk-env removal) and generic otherwise.
 
 ### Time
 
@@ -249,7 +256,6 @@ Other deployment patterns and backends come later, as adapters.
 Treat these as open; ask before building on them.
 
 - **Pod association for replays**: the tap runs `k8sattributes` in `passthrough` mode so recordings carry `k8s.pod.ip` (a file has no client connection). Alternative: SDKs set `k8s.pod.uid` via the downward API and the tap stays processor-free.
-- **Golden-test strictness**: compare `summary` and `diagnosis` exactly; for `events`, require expected events to be present and ignore extras.
 - **Report schema details**: signal ID prefixes (`s`, `p`, `r`, `a`), field names, the `covered_simulated` status.
 - **Repository layout**: fixtures in `testdata/` (Go convention).
 
@@ -317,12 +323,15 @@ GOFLAGS=-mod=vendor go test ./...
 - To use a new dependency: add it to `go.mod` and to `internal/deps/tools.go`, push, wait for the workflow, fetch again, then commit the `go.mod`/`go.sum` from the deps branch (they're verified by CI).
 - With normal network access (e.g. on a laptop or in CI), plain `go test ./...` works; vendoring isn't needed.
 
+### Running
+
+```sh
+GOFLAGS=-mod=vendor go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/*.yaml
+```
+
 ### Fixtures
 
 ```sh
-# Fixture consistency (stopgap, until Go tests exist)
-python3 scripts/check_fixtures.py testdata/thin-slice
-
 # Real-tool checks of the fixtures (not run yet)
 cd testdata/thin-slice
 promtool check rules rules/inference.rules.yaml
@@ -339,7 +348,7 @@ otelcol-contrib validate --config=collector/collector.yaml
 AGENTS.md                 this file
 README.md                 human-facing overview
 LICENSE                   Apache-2.0
-scripts/check_fixtures.py stopgap fixture checker (delete once Go tests cover every node)
+cmd/otelcov               the CLI
 go.mod, go.sum            module github.com/Anefu/otelcov
 internal/deps/tools.go    packages pinned for vendoring (build tag `tools`)
 internal/lineage          signal IDs, events, the run's log
@@ -352,6 +361,8 @@ internal/promqlx          real PromQL engine over in-memory series; the label-fl
 internal/rulefile         rule files (rulefmt), dependency order
 internal/ruleeval         one expression for coverage: rewrite, engine, explainer, parents
 internal/alerting         the Alert type
+internal/requirements     coverage requirements (OTel terms)
+internal/report           summary, diagnosis
 internal/scenario         scenario loading, runs, golden tests
 internal/nodes/...        one package per node; nodetest has test helpers
 .github/workflows/ci.yml      gofmt, tidy, vet, tests, fixture check

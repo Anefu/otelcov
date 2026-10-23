@@ -28,6 +28,3 @@ jobs:
 
       - run: go vet ./...
       - run: go test ./...
-
-      - name: Check fixture consistency
-        run: python3 scripts/check_fixtures.py testdata/thin-slice
