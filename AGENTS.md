@@ -233,6 +233,9 @@ Other deployment patterns and backends come later, as adapters.
 | 40 | resourcedetection values come from snapshot metadata: each collector instance's detected attributes are captured at recording time | Read them from Mimir; "present, value unknown" | Real values; a detector added by a PR gives `unverified` until a new snapshot exists |
 | 41 | Kubernetes objects use the real API types (`k8s.io/api`, `apimachinery`, same versions as collector-contrib 0.135) | Own minimal structs | Exact semantics; nodes, ConfigMaps and Deployments will be needed |
 | 42 | Code layout: `internal/{lineage,unit,graph,kube,otelenv,collector,scenario,nodes/...}`, one package per node; nodes are built with their config and take data in `ProcessMetrics` | — | Mirrors the collector (typed pipelines, config at construction) |
+| 43 | After the backend node, series are **Prometheus-shaped** `pmetric`: Prometheus name, all labels as data-point attributes, empty resource | OTLP-shaped, translated when queried | Matches what Mimir stores; rule outputs fit the same shape; trivial conversion for PromQL |
+| 44 | Alerts are a small Go type of our own, the one exception to decision 35 | `plog` log records | Alerts have state over time and a fixed schema; no collector code runs on them, and Alertmanager needs plain label sets anyway |
+| 45 | Prometheus and Alertmanager at the versions collector-contrib 0.135 uses (Prometheus commit `419d436a447a`, Alertmanager v0.28.1); OTLP → series uses Prometheus's own translator (`prometheusremotewrite`) | Mimir's fork of the translator (AGPL, can't be imported) | Real code; versions consistent with the collector pin |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 

@@ -10,6 +10,10 @@ require (
 	k8s.io/api v0.32.3
 	k8s.io/apimachinery v0.32.3
 	sigs.k8s.io/yaml v1.5.0
+	// Same Prometheus and Alertmanager versions as collector-contrib 0.135.
+	github.com/prometheus/alertmanager v0.28.1
+	github.com/prometheus/common v0.65.0
+	github.com/prometheus/prometheus v0.304.3-0.20250703114031-419d436a447a
 )
 
 require (
