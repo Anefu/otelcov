@@ -278,6 +278,7 @@ otelcol-contrib validate --config=collector/collector.yaml
 
 ```
 AGENTS.md                 this file
+README.md                 human-facing overview
 LICENSE                   Apache-2.0
 scripts/check_fixtures.py stopgap fixture checker (delete once Go tests exist)
 testdata/thin-slice/      fixtures for the first slice; see its README
