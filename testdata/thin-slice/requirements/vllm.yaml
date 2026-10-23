@@ -1,0 +1,15 @@
+# What "covered" means for this slice. The forward check: for every matching pod,
+# is there a path from the pod's signal to the alert, and from the alert to the receiver?
+requirements:
+  - id: vllm-memory-watched
+    description: Every vLLM pod's memory is watched by VLLMMemoryHigh, which pages the inference team.
+    for_each_pod:
+      namespace: inference
+      selector:
+        app.kubernetes.io/name: vllm
+    signal:
+      metric: process.memory.usage   # OTel name, as it appears in the recording
+      container: vllm                # which container in the pod is expected to emit it
+    must_reach:
+      alert: VLLMMemoryHigh
+      receiver: inference-pager

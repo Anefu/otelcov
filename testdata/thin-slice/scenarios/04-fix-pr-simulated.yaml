@@ -1,0 +1,20 @@
+# The fix, checked before merge. The PR adds the sidecar together with
+# OTEL_RESOURCE_ATTRIBUTES on the vllm container. The snapshot predates the env
+# var, so sdk-env simulates it: vllm-embed comes out "covered_simulated".
+name: 04-fix-pr-simulated
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  recording: ../recordings/baseline.otlp.jsonl
+  snapshot: ../recordings/baseline.meta.yaml
+
+config:
+  pods: ../k8s/pods-sidecar-fixed.yaml
+  collector: ../collector/collector.yaml
+  collector_pipeline: metrics
+  backend: ../backend/mimir-otlp.yaml
+  rules: [../rules/inference.rules.yaml]
+  alertmanager: ../alertmanager/alertmanager.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/04-fix-pr-simulated.report.json

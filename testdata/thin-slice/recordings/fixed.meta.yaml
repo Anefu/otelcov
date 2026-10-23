@@ -1,0 +1,4 @@
+# Snapshot metadata: what was running when fixed.otlp.jsonl was captured,
+# i.e. after the fix PR (scenario 04) was deployed to staging.
+recorded_at: 2026-10-23T10:00:00Z
+pods: ../k8s/pods-sidecar-fixed.yaml
