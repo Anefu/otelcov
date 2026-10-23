@@ -4,7 +4,7 @@ Coverage and lineage for OpenTelemetry monitoring stacks.
 
 otelcov replays recorded telemetry through your collectors, backends, rules, alerts and dashboards to show which workloads are actually watched, explain where coverage breaks, and check pull requests before they merge.
 
-> **Status: early design.** There is no working code yet. The design and its decisions live in [AGENTS.md](AGENTS.md); the first test fixtures are in [`testdata/thin-slice/`](testdata/thin-slice/).
+> **Status: early implementation.** The first nodes (replay, SDK environment simulation, k8sattributes) run against the test fixtures in [`testdata/thin-slice/`](testdata/thin-slice/); backend, rules, alerts and reports are next. The design and its decisions live in [AGENTS.md](AGENTS.md).
 
 ## The problem
 
