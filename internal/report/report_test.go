@@ -71,7 +71,7 @@ func TestStatuses(t *testing.T) {
 		if e.Status != NotCovered || e.BrokenAt != "alertmanager/route" {
 			t.Errorf("%+v", e)
 		}
-		if len(r.Diagnosis) != 1 || !strings.Contains(r.Diagnosis[0].Explanation, "sends it to email, not pager") {
+		if len(r.Diagnosis) != 1 || !strings.Contains(r.Diagnosis[0].Explanation, "sends it to `email`, not `pager`") {
 			t.Errorf("%+v", r.Diagnosis)
 		}
 	})

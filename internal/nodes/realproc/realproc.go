@@ -444,6 +444,7 @@ func (n *Node) explainChanges(ctx context.Context, before, after pmetric.Metrics
 			}
 			d := withStatement(w.Detail, ef.stmt)
 			d["condition"] = false
+			d["where"] = whereClause(ef.stmt.text)
 			if w.Action == lineage.Set {
 				d["would_set"] = w.Value
 			} else {

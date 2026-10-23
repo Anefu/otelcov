@@ -275,7 +275,7 @@ func extract(key string, pod *corev1.Pod, c *corev1.Container, how string) (valu
 		return strings.TrimSuffix(rs, "-"+hash), "", nil
 	case "k8s.container.name", "container.id", "container.image.name", "container.image.tag":
 		if c == nil {
-			return "", fmt.Sprintf("pod has %d containers (%s) and the resource has neither container.id nor k8s.container.name, so the container can't be identified",
+			return "", fmt.Sprintf("pod has %d containers (%s) and the resource has neither `container.id` nor `k8s.container.name`, so the container can't be identified",
 				len(pod.Spec.Containers), strings.Join(kube.ContainerNames(pod), ", ")), nil
 		}
 		return containerValue(key, pod, c, how)

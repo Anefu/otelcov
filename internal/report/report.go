@@ -264,8 +264,8 @@ func (ix *index) answerFrom(req requirements.Requirement, src lineage.SignalID, 
 			}
 		}
 		d := &Diagnosis{Requirement: req.ID, Pod: entry.Pod, Chain: chain,
-			Explanation: fmt.Sprintf("%s fires for this pod, but routing sends it to %s, not %s.", req.MustReach.Alert, strings.Join(got, ", "), req.MustReach.Receiver),
-			Hints:       []string{"Check the route matchers on the way to " + req.MustReach.Receiver + " against the alert's labels."}}
+			Explanation: fmt.Sprintf("%s fires for this pod, but routing sends it to %s, not %s.", q(req.MustReach.Alert), qs(got), q(req.MustReach.Receiver)),
+			Hints:       []string{"Check the route matchers on the way to " + q(req.MustReach.Receiver) + " against the alert's labels."}}
 		if len(chain) > 0 {
 			d.RootCause = chain[len(chain)-1]
 		}
@@ -382,15 +382,15 @@ func (ix *index) diagnose(req requirements.Requirement, entry Entry, drop lineag
 	if reqs, ok := drop.Detail["requires"].(map[string]any); ok {
 		matcher, _ = reqs["matcher"].(string)
 	}
-	where := strings.Replace(drop.Node, "/", " ", 1)
+	where := nodeRef(drop.Node)
 	if label == "" {
-		d.Explanation = fmt.Sprintf("%s drops this pod's series: %s.", where, drop.Reason)
+		d.Explanation = fmt.Sprintf("%s drops this pod's series: %s.", capitalize(where), drop.Reason)
 		d.Hints = []string{"Check the matching in " + where + " against this pod's series."}
 		return d
 	}
 	d.MissingLabel = label
 	d.Explanation = fmt.Sprintf("%s only selects series matching %s, and this pod's series has no %s label, so it never reaches %s.",
-		where, matcher, label, req.MustReach.Alert)
+		capitalize(where), q(matcher), q(label), q(req.MustReach.Alert))
 
 	// Which resource attribute should have become the label?
 	namer := otlptranslator.LabelNamer{}
@@ -405,12 +405,12 @@ func (ix *index) diagnose(req requirements.Requirement, entry Entry, drop lineag
 		}
 	}
 	if attr == "" {
-		d.Hints = []string{fmt.Sprintf("No resource attribute is promoted to %s. Promote one in Mimir, or relax %s in %s.", label, matcher, where)}
+		d.Hints = []string{fmt.Sprintf("No resource attribute is promoted to %s. Promote one in Mimir, or relax %s in %s.", q(label), q(matcher), where)}
 		return d
 	}
 	d.Chain = append(d.Chain, backend.ID)
 	d.RootCause = backend.ID
-	d.Explanation += fmt.Sprintf(" %s comes from resource attribute %s", label, attr)
+	d.Explanation += fmt.Sprintf(" %s comes from resource attribute %s", q(label), q(attr))
 
 	// The last node that touched the attribute on the recorded signal.
 	var root lineage.Event
@@ -421,12 +421,12 @@ func (ix *index) diagnose(req requirements.Requirement, entry Entry, drop lineag
 	}
 	if root.ID == "" {
 		d.Explanation += ", which nothing sets for this pod."
-		d.Hints = []string{fmt.Sprintf("Set %s before the data reaches the backend: in the SDK's OTEL_RESOURCE_ATTRIBUTES, or with a collector processor.", attr)}
+		d.Hints = []string{fmt.Sprintf("Set %s before the data reaches the backend: in the SDK's `OTEL_RESOURCE_ATTRIBUTES`, or with a collector processor.", q(attr))}
 		return d
 	}
 	d.Chain = append(d.Chain, root.ID)
 	d.RootCause = root.ID
-	d.Explanation += fmt.Sprintf(", which %s didn't set: %s.", root.Node, root.Reason)
+	d.Explanation += fmt.Sprintf(", which %s didn't set: %s.", q(root.Node), root.Reason)
 	d.Hints = hints(req, attr, root, matcher, where)
 	return d
 }
@@ -436,19 +436,46 @@ func hints(req requirements.Requirement, attr string, root lineage.Event, matche
 	switch {
 	case strings.HasSuffix(root.Node, "k8sattributes") && attr == "k8s.container.name" && c != "":
 		return []string{
-			fmt.Sprintf("Set k8s.container.name=%s in OTEL_RESOURCE_ATTRIBUTES on the %s container.", c, c),
-			"Or have the SDK send container.id, so k8sattributes can match the container.",
+			fmt.Sprintf("Set %s in %s on the %s container.", q("k8s.container.name="+c), q("OTEL_RESOURCE_ATTRIBUTES"), q(c)),
+			fmt.Sprintf("Or have the SDK send %s, so k8sattributes can match the container.", q("container.id")),
 		}
 	case root.Action == lineage.Skipped && root.Detail["statement"] != nil:
-		h := fmt.Sprintf("Statement `%v` in %s doesn't run for this pod: its condition is false.", root.Detail["statement"], root.Node)
-		if v, ok := root.Detail["would_set"]; ok {
-			h = fmt.Sprintf("Statement `%v` in %s would set %s=%v, but its condition is false for this pod.", root.Detail["statement"], root.Node, attr, v)
+		// The explanation already quotes the statement; the hint says what to change.
+		if cond, ok := root.Detail["where"].(string); ok && cond != "" {
+			return []string{fmt.Sprintf("Make the condition %s in %s hold for this pod, or set %s another way.", q(cond), q(root.Node), q(attr))}
 		}
-		return []string{h, fmt.Sprintf("Fix the condition, or set %s another way.", attr)}
+		return []string{fmt.Sprintf("Make the statement's condition in %s hold for this pod, or set %s another way.", q(root.Node), q(attr))}
 	case root.Node == sdkenv.Name && root.Action == lineage.Removed:
-		return []string{fmt.Sprintf("The change under test removes %s from the SDK environment; keep it, or relax %s in %s.", attr, matcher, where)}
+		return []string{fmt.Sprintf("The change under test removes %s from the SDK environment. Keep it, or relax %s in %s.", q(attr), q(matcher), where)}
 	}
-	return []string{fmt.Sprintf("Make sure the series carries %s, or relax %s in %s.", attr, matcher, where)}
+	return []string{fmt.Sprintf("Make sure the series carries %s, or relax %s in %s.", q(attr), q(matcher), where)}
+}
+
+// Explanations and hints quote identifiers in backticks; the report page and
+// the CLI show quoted spans as code.
+func q(s string) string { return "`" + s + "`" }
+
+func qs(list []string) string {
+	out := make([]string, len(list))
+	for i, s := range list {
+		out[i] = q(s)
+	}
+	return strings.Join(out, ", ")
+}
+
+// nodeRef names a lineage node in prose: "rule/x" is rule `x`.
+func nodeRef(node string) string {
+	if kind, name, ok := strings.Cut(node, "/"); ok && (kind == "rule" || kind == "alert") {
+		return kind + " " + q(name)
+	}
+	return q(node)
+}
+
+func capitalize(s string) string {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // SortedSignalIDs returns signal IDs in a stable, readable order.

@@ -198,6 +198,17 @@ func pick[K any](full, editor *ottl.Statement[K], editorOnly bool) *ottl.Stateme
 // editorPart returns a statement without its where clause, splitting on the
 // first " where " outside quotes.
 func editorPart(s string) string {
+	ed, _ := splitWhere(s)
+	return ed
+}
+
+// whereClause returns a statement's condition, or "".
+func whereClause(s string) string {
+	_, cond := splitWhere(s)
+	return cond
+}
+
+func splitWhere(s string) (editor, cond string) {
 	inQuote := byte(0)
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -211,10 +222,10 @@ func editorPart(s string) string {
 		case c == '"' || c == '\'':
 			inQuote = c
 		case strings.HasPrefix(s[i:], " where "):
-			return strings.TrimSpace(s[:i])
+			return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+len(" where "):])
 		}
 	}
-	return s
+	return s, ""
 }
 
 // dataPoint returns an item's single data point, as OTTL expects it.

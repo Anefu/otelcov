@@ -68,3 +68,4 @@ and update the `sha256` fields, or the report will warn that the topology may be
 
 - **Created** together with the topology runner, real processor nodes and OTTL statement explanations. Reviewed by hand: 01 covered for both pods; 02 not covered for both, root cause the skipped `transform/team` statement, then Mimir's `skipped` promotion of `team`, then the rule's `dropped`; 03 unverified for both via the join event.
 - **Report section renamed**: `topology` is now `problems` (03), since it also carries pod fields otelcov doesn't know. Nothing else changed.
+- **Identifiers quoted, one hint for a skipped statement** (02): explanations put identifiers in backticks; the two hints became one that says what to change ("Make the condition `...` in `gateway/transform/team` hold for this pod, or set `team` another way") instead of restating the explanation; the skipped events carry the statement's condition as `detail.where`.
