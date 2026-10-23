@@ -14,9 +14,12 @@ import (
 
 // Scenario is one run. All paths are absolute after Load.
 type Scenario struct {
-	Name     string `json:"name"`
-	EvalTime string `json:"eval_time"`
-	Data     struct {
+	Name string `json:"name"`
+	// Description says in a sentence what the scenario changes, for people
+	// reading the report page.
+	Description string `json:"description,omitempty"`
+	EvalTime    string `json:"eval_time"`
+	Data        struct {
 		Recording string `json:"recording"`
 		Snapshot  string `json:"snapshot"`
 	} `json:"data"`

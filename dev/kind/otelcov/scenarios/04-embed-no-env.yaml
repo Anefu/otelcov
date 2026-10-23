@@ -3,6 +3,7 @@
 # What-if: the motivating bug (whatif/apps-embed-no-env.yaml). The pods under
 # test are the captured pods with that file's Deployment templates applied.
 name: 04-embed-no-env
+description: "A PR drops OTEL_RESOURCE_ATTRIBUTES from vllm-embed, the pod with a sidecar."
 eval_time: ${EVAL_TIME}
 
 data:

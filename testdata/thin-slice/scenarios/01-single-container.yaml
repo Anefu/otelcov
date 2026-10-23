@@ -1,5 +1,6 @@
 # The snapshot as recorded: both vLLM pods have one container, so both are covered.
 name: 01-single-container
+description: "As recorded: both vLLM pods have one container."
 eval_time: 2026-10-23T10:00:30Z   # single instant; `for:` is treated as met
 
 data:                              # the live side of f(data, config)

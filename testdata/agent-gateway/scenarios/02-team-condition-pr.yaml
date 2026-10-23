@@ -1,5 +1,6 @@
 # A PR changes the gateway's team statement to namespace inference-prod. team is no longer set, so the rule's team="inference" matcher drops both pods.
 name: 02-team-condition-pr
+description: "A PR makes the gateway's team statement match namespace inference-prod."
 eval_time: 2026-10-23T10:00:30Z
 
 data:

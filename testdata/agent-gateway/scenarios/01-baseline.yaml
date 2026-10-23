@@ -1,5 +1,6 @@
 # As deployed: both vLLM pods reach VLLMMemoryHigh and page the inference team.
 name: 01-baseline
+description: "The configs as deployed."
 eval_time: 2026-10-23T10:00:30Z
 
 data:

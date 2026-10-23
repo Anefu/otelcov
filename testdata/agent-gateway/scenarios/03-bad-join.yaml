@@ -1,5 +1,6 @@
 # The agent sends gRPC to the gateway's HTTP port. Validation can't trust the join, so everything behind it is unverified.
 name: 03-bad-join
+description: "The agent sends to the gateway's HTTP port (4318) instead of gRPC (4317)."
 eval_time: 2026-10-23T10:00:30Z
 
 data:

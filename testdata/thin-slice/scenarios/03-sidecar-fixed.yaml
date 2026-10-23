@@ -1,6 +1,7 @@
 # After the fix PR (04) is deployed to staging: a new snapshot in which the SDK
 # really sends k8s.container.name. Covered, and observed rather than simulated.
 name: 03-sidecar-fixed
+description: "A new recording, taken after the fix PR (04) was deployed."
 eval_time: 2026-10-23T10:00:30Z
 
 data:

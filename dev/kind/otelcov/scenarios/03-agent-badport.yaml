@@ -2,6 +2,7 @@
 # the recording's last timestamp. Paths are relative to captured/scenarios/.
 # What-if: the agent sends to the gateway's HTTP port (whatif/agent-badport.yaml).
 name: 03-agent-badport
+description: "The agent sends to the gateway's HTTP port (4318) instead of gRPC (4317)."
 eval_time: ${EVAL_TIME}
 
 data:

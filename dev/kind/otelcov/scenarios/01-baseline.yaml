@@ -2,6 +2,7 @@
 # the recording's last timestamp. Paths are relative to captured/scenarios/.
 # As deployed by default (config/).
 name: 01-baseline
+description: "The configs as deployed by default (config/)."
 eval_time: ${EVAL_TIME}
 
 data:

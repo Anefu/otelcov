@@ -1,6 +1,7 @@
 # The bug, caught before merge. A PR adds a sidecar to vllm-embed. Same snapshot
 # as 01; only the pod specs change. A config change alone flips the result.
 name: 02-sidecar-added
+description: "A PR adds a log-shipper sidecar to vllm-embed."
 eval_time: 2026-10-23T10:00:30Z
 
 data:

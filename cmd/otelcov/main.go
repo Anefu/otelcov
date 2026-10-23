@@ -65,7 +65,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "%s: %v\n", path, err)
 			return 2
 		}
-		page.Scenarios = append(page.Scenarios, htmlreport.Scenario{Report: rep, Flow: flow})
+		page.Scenarios = append(page.Scenarios, htmlreport.Scenario{Description: s.Description, Report: rep, Flow: flow})
 		if *asJSON {
 			enc := json.NewEncoder(stdout)
 			enc.SetIndent("", "  ")
