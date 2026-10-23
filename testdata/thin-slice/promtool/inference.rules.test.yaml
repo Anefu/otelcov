@@ -1,0 +1,60 @@
+# Cross-checks the rule and alert nodes with the real Prometheus engine, using the
+# series each scenario's report says Mimir would store.
+# Run from this folder:  promtool test rules inference.rules.test.yaml
+rule_files:
+  - ../rules/inference.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: "01 and 03: both pods carry k8s_container_name, so both reach the recording rule"
+    interval: 1m
+    input_series:
+      - series: 'process_memory_usage_bytes{job="vllm",k8s_namespace_name="inference",k8s_pod_name="vllm-chat-6f9d8b7c4d-k2x7p",k8s_container_name="vllm",k8s_node_name="ip-10-0-1-23.eu-west-1.compute.internal"}'
+        values: "9126805504x15"
+      - series: 'process_memory_usage_bytes{job="vllm",k8s_namespace_name="inference",k8s_pod_name="vllm-embed-5c8b9d6f7b-q4m9t",k8s_container_name="vllm",k8s_node_name="ip-10-0-1-23.eu-west-1.compute.internal"}'
+        values: "7415529472x15"
+    promql_expr_test:
+      - expr: inference:vllm_memory_bytes:max
+        eval_time: 5m
+        exp_samples:
+          - labels: 'inference:vllm_memory_bytes:max{k8s_namespace_name="inference",k8s_pod_name="vllm-chat-6f9d8b7c4d-k2x7p"}'
+            value: 9126805504
+          - labels: 'inference:vllm_memory_bytes:max{k8s_namespace_name="inference",k8s_pod_name="vllm-embed-5c8b9d6f7b-q4m9t"}'
+            value: 7415529472
+
+  - name: "02: the sidecar pod's series has no k8s_container_name and drops out of the recording rule"
+    interval: 1m
+    input_series:
+      - series: 'process_memory_usage_bytes{job="vllm",k8s_namespace_name="inference",k8s_pod_name="vllm-chat-6f9d8b7c4d-k2x7p",k8s_container_name="vllm",k8s_node_name="ip-10-0-1-23.eu-west-1.compute.internal"}'
+        values: "9126805504x15"
+      - series: 'process_memory_usage_bytes{job="vllm",k8s_namespace_name="inference",k8s_pod_name="vllm-embed-5c8b9d6f7b-q4m9t",k8s_node_name="ip-10-0-1-23.eu-west-1.compute.internal"}'
+        values: "7415529472x15"
+    promql_expr_test:
+      - expr: inference:vllm_memory_bytes:max
+        eval_time: 5m
+        exp_samples:
+          - labels: 'inference:vllm_memory_bytes:max{k8s_namespace_name="inference",k8s_pod_name="vllm-chat-6f9d8b7c4d-k2x7p"}'
+            value: 9126805504
+
+  # "Covered" in the reports means "watched, threshold ignored". This test shows it
+  # matches what really happens with bad values: in the 02 state, both pods use
+  # 13 GB, but only vllm-chat can page.
+  - name: "02 with synthetic bad values: only vllm-chat fires"
+    interval: 1m
+    input_series:
+      - series: 'process_memory_usage_bytes{job="vllm",k8s_namespace_name="inference",k8s_pod_name="vllm-chat-6f9d8b7c4d-k2x7p",k8s_container_name="vllm",k8s_node_name="ip-10-0-1-23.eu-west-1.compute.internal"}'
+        values: "13000000000x20"
+      - series: 'process_memory_usage_bytes{job="vllm",k8s_namespace_name="inference",k8s_pod_name="vllm-embed-5c8b9d6f7b-q4m9t",k8s_node_name="ip-10-0-1-23.eu-west-1.compute.internal"}'
+        values: "13000000000x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: VLLMMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              team: inference
+              k8s_namespace_name: inference
+              k8s_pod_name: vllm-chat-6f9d8b7c4d-k2x7p
+            exp_annotations:
+              summary: "vLLM memory is high in inference/vllm-chat-6f9d8b7c4d-k2x7p"
