@@ -4,7 +4,13 @@ go 1.24
 
 // Pinned to the collector version the checked collectors run (0.135.x).
 // pdata v1.41.0 ships with collector core and contrib v0.135.0.
-require go.opentelemetry.io/collector/pdata v1.41.0
+require (
+	go.opentelemetry.io/collector/pdata v1.41.0
+	// Same Kubernetes versions as collector-contrib 0.135's k8sattributes processor.
+	k8s.io/api v0.32.3
+	k8s.io/apimachinery v0.32.3
+	sigs.k8s.io/yaml v1.5.0
+)
 
 require (
 	github.com/gogo/protobuf v1.3.2 // indirect
