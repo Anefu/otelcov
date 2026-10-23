@@ -7,12 +7,15 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/Anefu/otelcov/internal/alerting"
 	"github.com/Anefu/otelcov/internal/collector"
 	"github.com/Anefu/otelcov/internal/graph"
 	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/lineage"
+	"github.com/Anefu/otelcov/internal/nodes/alerts"
 	"github.com/Anefu/otelcov/internal/nodes/k8sattributes"
 	"github.com/Anefu/otelcov/internal/nodes/mimir"
+	"github.com/Anefu/otelcov/internal/nodes/route"
 	"github.com/Anefu/otelcov/internal/nodes/rules"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
@@ -27,12 +30,15 @@ const collectorPrefix = "collector"
 // Result is the outcome of a run.
 type Result struct {
 	Log *lineage.Log
-	// Items are the signals that left the last implemented node.
+	// Items are the series after recording rules.
 	Items []unit.Metric
+	// Alerts are the alerts the alerting rules could produce.
+	Alerts []alerting.Alert
 }
 
 // Run executes the scenario's graph as far as it is implemented: replay,
-// sdk-env, the collector pipeline's processors, the backend, then recording rules.
+// sdk-env, the collector pipeline's processors, the backend, recording rules,
+// alerting rules, then Alertmanager routing.
 func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	snap, err := LoadSnapshot(s.Data.Snapshot)
 	if err != nil {
@@ -86,7 +92,27 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Log: log, Items: items}, nil
+
+	ao, err := alerts.New(ruleSet.Alerting, at).Process(ctx, items)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]lineage.SignalID, len(ao.Alerts))
+	for i, a := range ao.Alerts {
+		ids[i] = a.ID
+	}
+	if err := graph.Record(log, "alerts", ao.Events, ao.Signals, ids); err != nil {
+		return nil, err
+	}
+
+	router, err := route.Load(s.Config.Alertmanager)
+	if err != nil {
+		return nil, fmt.Errorf("alertmanager: %w", err)
+	}
+	if err := graph.Record(log, route.Name, router.Process(ao.Alerts), nil, nil); err != nil {
+		return nil, err
+	}
+	return &Result{Log: log, Items: items, Alerts: ao.Alerts}, nil
 }
 
 // processorNode builds the node for one collector processor. Types and

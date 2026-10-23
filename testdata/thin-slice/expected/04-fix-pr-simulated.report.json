@@ -451,13 +451,29 @@
         "r1"
       ],
       "detail": {
-        "threshold": "> 12e9",
-        "threshold_handling": "ignored: coverage asks whether the pod is watched, not whether it fires now",
-        "for": "10m, treated as met at a single instant"
-      }
+        "expr": "inference:vllm_memory_bytes:max > 12000000000",
+        "evaluated_as": "inference:vllm_memory_bytes:max > bool 12000000000",
+        "for": "10m0s"
+      },
+      "reason": "thresholds are ignored: coverage asks whether a series could make the alert fire, not whether it fires now; `for` is treated as met"
     },
     {
       "id": "e24",
+      "node": "alert/VLLMMemoryHigh",
+      "signal": "a2",
+      "action": "derived",
+      "from": [
+        "r2"
+      ],
+      "detail": {
+        "expr": "inference:vllm_memory_bytes:max > 12000000000",
+        "evaluated_as": "inference:vllm_memory_bytes:max > bool 12000000000",
+        "for": "10m0s"
+      },
+      "reason": "thresholds are ignored: coverage asks whether a series could make the alert fire, not whether it fires now; `for` is treated as met"
+    },
+    {
+      "id": "e25",
       "node": "alertmanager/route",
       "signal": "a1",
       "action": "routed",
@@ -471,25 +487,11 @@
           {
             "receiver": "inference-pager",
             "matchers": [
-              "team=\"inference\"",
-              "severity=\"page\""
+              "severity=\"page\"",
+              "team=\"inference\""
             ]
           }
         ]
-      }
-    },
-    {
-      "id": "e25",
-      "node": "alert/VLLMMemoryHigh",
-      "signal": "a2",
-      "action": "derived",
-      "from": [
-        "r2"
-      ],
-      "detail": {
-        "threshold": "> 12e9",
-        "threshold_handling": "ignored: coverage asks whether the pod is watched, not whether it fires now",
-        "for": "10m, treated as met at a single instant"
       }
     },
     {
@@ -507,8 +509,8 @@
           {
             "receiver": "inference-pager",
             "matchers": [
-              "team=\"inference\"",
-              "severity=\"page\""
+              "severity=\"page\"",
+              "team=\"inference\""
             ]
           }
         ]

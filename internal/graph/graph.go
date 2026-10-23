@@ -64,12 +64,23 @@ func RunMetrics(ctx context.Context, src MetricsSource, nodes []MetricsNode, log
 
 // apply logs a node's output and checks the lineage invariants.
 func apply(node string, out Output, log *lineage.Log) error {
-	for _, s := range out.Signals {
+	ids := make([]lineage.SignalID, len(out.Items))
+	for i, it := range out.Items {
+		ids[i] = it.ID
+	}
+	return Record(log, node, out.Events, out.Signals, ids)
+}
+
+// Record logs a stage's lineage after checking it: new signals are unique,
+// events name a node and a known signal, and every output ID was described.
+// Non-metrics stages (alerts, routing) use it directly.
+func Record(log *lineage.Log, node string, events []lineage.Event, signals []lineage.Signal, outputs []lineage.SignalID) error {
+	for _, s := range signals {
 		if err := log.AddSignal(s); err != nil {
 			return fmt.Errorf("%s: %w", node, err)
 		}
 	}
-	for _, e := range out.Events {
+	for _, e := range events {
 		if e.Node == "" || e.Signal == "" {
 			return fmt.Errorf("%s: event %q without node or signal", node, e.Action)
 		}
@@ -77,12 +88,12 @@ func apply(node string, out Output, log *lineage.Log) error {
 			return fmt.Errorf("%s: event %q on unknown signal %s", node, e.Action, e.Signal)
 		}
 	}
-	for _, it := range out.Items {
-		if !log.HasSignal(it.ID) {
-			return fmt.Errorf("%s: output item %s was never described", node, it.ID)
+	for _, id := range outputs {
+		if !log.HasSignal(id) {
+			return fmt.Errorf("%s: output %s was never described", node, id)
 		}
 	}
-	log.Record(out.Events...)
+	log.Record(events...)
 	return nil
 }
 
