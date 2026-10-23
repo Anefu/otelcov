@@ -273,12 +273,8 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
   // Per-scenario indexes.
   scenarios.forEach(function (sc) {
     var r = sc.report;
-    sc.byNode = {};
-    sc.counts = {};
-    (r.events || []).forEach(function (e) {
-      var c = sc.counts[e.node] || (sc.counts[e.node] = {});
-      c[e.action] = (c[e.action] || 0) + 1;
-    });
+    // The embedded report only has the events routes show; counts cover all.
+    sc.counts = sc.event_counts || {};
     sc.entries = {};
     (r.summary || []).forEach(function (e) { sc.entries[key(e.requirement, e.pod)] = e; });
     sc.diag = {};
