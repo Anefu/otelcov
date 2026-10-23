@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"sigs.k8s.io/yaml"
+
+	"github.com/Anefu/otelcov/internal/nodes/resourcedetection"
 )
 
 // Scenario is one run. All paths are absolute after Load.
@@ -19,12 +21,11 @@ type Scenario struct {
 		Snapshot  string `json:"snapshot"`
 	} `json:"data"`
 	Config struct {
-		Pods              string   `json:"pods"`
-		Collector         string   `json:"collector"`
-		CollectorPipeline string   `json:"collector_pipeline"`
-		Backend           string   `json:"backend"`
-		Rules             []string `json:"rules"`
-		Alertmanager      string   `json:"alertmanager"`
+		// Pods in the config under test.
+		Pods string `json:"pods"`
+		// Topology names every other config: collectors, backends, rules,
+		// Alertmanager.
+		Topology string `json:"topology"`
 	} `json:"config"`
 	Requirements string `json:"requirements"`
 	Expected     string `json:"expected"`
@@ -39,6 +40,11 @@ type Snapshot struct {
 	RecordedAt string `json:"recorded_at"`
 	// Pods is the path of the pod specs running at recording time.
 	Pods string `json:"pods"`
+	// ResourceDetection holds what each resourcedetection processor detected
+	// at recording time, by collector name then processor ID: the processor's
+	// config then, and attributes per Kubernetes node name (for daemonsets) or
+	// "*".
+	ResourceDetection map[string]map[string]resourcedetection.Recorded `json:"resource_detection,omitempty"`
 }
 
 // Load reads a scenario file and makes its paths absolute. Report paths are
@@ -57,14 +63,10 @@ func Load(path, root string) (*Scenario, error) {
 		return nil, err
 	}
 	for _, p := range []*string{
-		&s.Data.Recording, &s.Data.Snapshot,
-		&s.Config.Pods, &s.Config.Collector, &s.Config.Backend, &s.Config.Alertmanager,
+		&s.Data.Recording, &s.Data.Snapshot, &s.Config.Pods, &s.Config.Topology,
 		&s.Requirements, &s.Expected,
 	} {
 		*p = abs(dir, *p)
-	}
-	for i := range s.Config.Rules {
-		s.Config.Rules[i] = abs(dir, s.Config.Rules[i])
 	}
 	if s.Root, err = filepath.Abs(root); err != nil {
 		return nil, err

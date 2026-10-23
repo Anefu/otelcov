@@ -9,11 +9,7 @@ data:
 
 config:
   pods: ../k8s/pods-sidecar.yaml
-  collector: ../collector/collector.yaml
-  collector_pipeline: metrics
-  backend: ../backend/mimir-otlp.yaml
-  rules: [../rules/inference.rules.yaml]
-  alertmanager: ../alertmanager/alertmanager.yaml
+  topology: ../topology.yaml
 
 requirements: ../requirements/vllm.yaml
 expected: ../expected/02-sidecar-added.report.json

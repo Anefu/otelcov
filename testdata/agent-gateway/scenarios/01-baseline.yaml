@@ -1,0 +1,14 @@
+# As deployed: both vLLM pods reach VLLMMemoryHigh and page the inference team.
+name: 01-baseline
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  recording: ../recordings/staging.otlp.jsonl
+  snapshot: ../recordings/staging.meta.yaml
+
+config:
+  pods: ../k8s/pods.yaml
+  topology: ../topology.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/01-baseline.report.json

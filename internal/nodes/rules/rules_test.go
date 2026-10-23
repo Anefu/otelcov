@@ -35,7 +35,7 @@ func rule(t *testing.T, record, expr string) rulefile.Recording {
 
 func run(t *testing.T, rs []rulefile.Recording, in ...unit.Metric) map[string][]lineage.Event {
 	t.Helper()
-	n, err := New(rs, at)
+	n, err := New(rs, at, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestDependencyOrder(t *testing.T) {
 	}
 
 	cyc := []rulefile.Recording{rule(t, "a", `b`), rule(t, "b", `a`)}
-	if _, err := New(cyc, at); err == nil {
+	if _, err := New(cyc, at, nil); err == nil {
 		t.Error("a cycle should be an error")
 	}
 }

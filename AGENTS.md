@@ -35,10 +35,11 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 ## Status
 
-**The thin slice works end to end**: replay, sdk-env, k8sattributes, Mimir backend, recording rules, alerting rules, Alertmanager routing and the report (summary per requirement, diagnosis). `otelcov scenario` runs scenarios from the command line. All four thin-slice scenarios match their golden reports exactly. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
+**Agent + gateway topologies work end to end**: replay, sdk-env, then the collectors as the topology file connects them (real collector-contrib processors, custom k8sattributes and resourcedetection), Mimir backend, recording rules, alerting rules, Alertmanager routing and the report. Transform and filter explain themselves per OTTL statement and condition. `otelcov scenario` runs scenarios from the command line. All seven scenarios match their golden reports exactly. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
 
-- `testdata/thin-slice/`: hand-written fixtures for the first end-to-end slice (4 scenarios, golden reports). See its README.
-- The fixtures have **not** yet been run through the real tools (promtool, amtool, otelcol validate). See Commands.
+- `testdata/thin-slice/`: the first end-to-end slice, one collector (4 scenarios). See its README.
+- `testdata/agent-gateway/`: daemonset agents + gateway, the owner's topology (3 scenarios). See its README.
+- The fixtures have **not** yet been run through the real tools (promtool, amtool, otelcol validate), and no recording from a real cluster exists yet. Next: a kind cluster with the agent + gateway topology (owner, planned).
 
 ## Scope of the first release
 
@@ -127,12 +128,17 @@ Other deployment patterns and backends come later, as adapters.
   - Validate on every run: referenced files exist; every join's exporter and receiver exist and are used in a pipeline; endpoints and protocols match. Failures make every path through that part `unverified`.
   - Store a `sha256` per referenced config. Hash differs but validation passes: trusted, with a warning to rerun the skill.
 - **Strict**: every exporter must be joined or explicitly listed as external (e.g. `debug`). An unknown exporter fails validation.
-- Draft shape:
+- Shape (as implemented; `tap`, `env` and `feature_gates` are unconfirmed defaults, see below):
 
   ```yaml
   version: 1
   collectors:
-    agent:   { config: rendered/otel-agent.yaml, sha256: …, tap: true }
+    agent:
+      config: rendered/otel-agent.yaml
+      sha256: …
+      tap: metrics/tap                 # the pipeline that records this collector's input
+      feature_gates: [some.gate, -other.gate]   # as passed with --feature-gates
+      env: { GATEWAY_ENDPOINT: "otel-gateway:4317" }   # values for ${env:VAR} in the config
     gateway: { config: rendered/otel-gateway.yaml, sha256: … }
   backends:
     mimir: { type: mimir-otlp, config: rendered/mimir-limits.yaml, sha256: … }
@@ -146,6 +152,18 @@ Other deployment patterns and backends come later, as adapters.
     - { from: gateway/exporters/otlphttp/mimir, to: mimir }
   ```
 
+- **How a run follows it** (`internal/topology`):
+  - Recorded items enter each tapped collector at its tap pipeline's receivers, and go through every other metrics pipeline using those receivers, processor by processor, in config order.
+  - A pipeline's exporters: joined to a receiver → the next collector's pipelines using that receiver; joined to a backend → delivered to that backend; listed in `external` → an `exported` event, and the data leaves the modeled system.
+  - Fan-out (a receiver feeding a second pipeline, a pipeline with a second exporter) copies the items with new IDs `c1, c2, ...`: node `topology`, action `derived`, `from` the original. The first branch keeps the original IDs.
+  - Data crossing a join that validation couldn't trust still flows, so the rest of the path is checked, but every item gets an `unverified` event at the exporter (node `<collector>/<exporter id>`).
+- **Validation** (`topology.Validate`), with three severities (unconfirmed default, see below):
+  - **fatal** (the run stops): a config can't be loaded; no collector has a tap, or the tap pipeline doesn't exist; an unknown backend or consumer type; a consumer reading something that doesn't exist; a join whose exporter isn't defined or isn't used by a pipeline; an exporter in use that is neither joined nor external (decision 28); the same feature gate set differently on two collectors.
+  - **unverified** (paths through the join are unverified): the exporter's port differs from the receiver's; the receiver doesn't enable the exporter's protocol (`otlp` = gRPC, `otlphttp` = HTTP); the receiver listens on localhost only (its default since collector 0.104 is `localhost:4317`/`4318`); non-OTLP exporters or receivers; a gRPC `otlp` exporter joined to Mimir, which takes OTLP over HTTP.
+  - **warning** (reported, results trusted): a config's hash differs from the topology's `sha256`; a receiver feeds a pipeline but isn't tapped, so its data isn't in recordings; an endpoint holds an `${env:...}` reference without a value under `env`, so ports can't be compared.
+  - Problems are in the report's `topology` section and printed by the CLI.
+- **Feature gates** of all collectors are applied to the collector's process-wide registry before processors are built.
+
 ### Extensibility
 
 - **Small core, everything else adapters** (proposed principle, not explicitly confirmed). Core: graph, signal model, lineage, report. Adapters: processors, backends, consumers.
@@ -157,7 +175,7 @@ Other deployment patterns and backends come later, as adapters.
 - Matching outputs to inputs: one input means any output came from it (0 outputs: `dropped`; 1: same ID, diff attributes; 2+: new IDs with `From` = input). In a metric group, outputs that match no single input get the whole group as `From`.
 - Adapters must pick the unit from config: e.g. transform/filter statements in metric context that look across data points (`HasAttrOnDatapoint`, `aggregate_on_attributes`), metricstransform `aggregate_labels` / `aggregate_label_values` / `combine` need the metric unit. A wrong declaration means silent drift, so adapters default to the metric unit when unsure.
 - Not yet supported: **series** units (need stepped time; e.g. deltatocumulative running totals), **trace** units (tail sampling; span IDs would give exact matching), **batch** units (groupbyattrs, dedup). Processors needing them give `unverified`.
-- Owner's processors: batch (pass-through), attributes, resource, filter, transform, metricstransform, deltatocumulative (item at a single instant), resourcedetection (custom node, source of values undecided), k8sattributes (custom node).
+- Owner's processors: batch and memory_limiter (pass-through), attributes and resource (real code, item unit), filter, transform and metricstransform (real code, metric unit), deltatocumulative (real code, item unit at a single instant), resourcedetection (custom node, values from snapshot metadata), k8sattributes (custom node).
 
 ### Nodes built so far
 
@@ -170,30 +188,49 @@ Other deployment patterns and backends come later, as adapters.
 - **`alert/<alertname>`** (`internal/nodes/alerts`, `internal/alerting`): alerting rules evaluated like recording rules (shared `internal/ruleeval`), outputs are `alerting.Alert` values `a1, a2, ...` with series labels minus `__name__`, rule labels and `alertname`. Templated rule labels (`{{ ... }}`) aren't expanded yet: `unverified`. `derived` details carry `expr`, `evaluated_as` (after the rewrite) and `for`.
 - **`alertmanager/route`** (`internal/nodes/route`): Alertmanager's own config loader and routing tree (`dispatch.Route.Match`, `continue` respected). `routed` events carry the receiver and the route path (matchers in Alertmanager's sorted order). A receiver without integrations gives `dropped`. Mute/active time intervals on the matched route and inhibit rules targeting the alert give `unverified` (not modeled yet). Silences are runtime state and out of scope.
 - **Series keep all their samples** through the backend and rules, so range functions see the recorded history.
-- **batch**: pass-through. Any other processor type: `Unsupported` (data passes through, every item `unverified`).
-- Scenario runs: `internal/scenario.Run` wires replay → sdk-env → the collector pipeline's processors → backend → recording rules (metrics graph), then alerting rules and routing as separate stages logged with `graph.Record`.
-- **Golden tests** (`internal/scenario/golden_test.go`) compare whole reports exactly, event IDs included. To change a golden report deliberately: `go test ./internal/scenario -update`, then review the diff and note why in `testdata/thin-slice/README.md`.
+- **Real processors** (`internal/nodes/realproc`): attributes, deltatocumulative, filter, metricstransform, resource and transform, built from their collector-contrib 0.135 factories with the config section from the collector config (`confmap`, then the component's own `Validate`). An invalid or unknown setting makes the node `Unsupported`. Each unit runs through the real processor; the output is compared with the input:
+  - Single-item units: same ID, with `set`/`removed` events for resource attributes, data point attributes (detail `level: datapoint`) and metric fields (`metric.name`, `metric.unit`, `metric.type`, `metric.temporality`); no output gives `dropped`.
+  - Metric units: outputs are matched to inputs by data point (start time, timestamp, value). An output matching no input gets a new `c` ID with every input of the group as parents. `metricstransform`'s `combine` merges different metrics, which needs a batch unit: `unverified`.
+  - **filter** names the first condition that matches a dropped item (`dropped by filter metric condition \`...\``), evaluated with the real OTTL library.
+  - **transform** replays its statements one at a time with the real OTTL library (`resource`, `scope`, `metric` and `datapoint` contexts, standard OTTL functions): each change names the statement that made it (detail `statement`, `context`). A statement whose condition is false is re-run without its `where` clause on a scratch copy; what it would have changed becomes a `skipped` event (detail `condition: false`, `would_set`), unless another statement did set that attribute. The replay is checked against the real output: a mismatch gives `unverified`. Statements that can't be replayed (transform-only functions such as `convert_sum_to_gauge`, groups with `conditions`, statements without a context block) only lose their statement detail; the real output stays the truth.
+  - The report turns a skipped statement into a specific hint: "Statement `...` in gateway/transform/team would set team=inference, but its condition is false for this pod."
+- **`<collector>/resourcedetection`** (`internal/nodes/resourcedetection`): applies values recorded in the snapshot (decision 40), for the Kubernetes node the signal's pod ran on (`k8s.pod.ip` → snapshot pod → `spec.nodeName`), else the `*` values. `override` (default true) is modeled: with it off, existing attributes are `kept`. No recorded values for the processor or the node, or detector settings that differ from the recorded config (anything but `override`): `unverified`.
+- **batch, memory_limiter**: pass-through (they regroup or shed load, but don't change data). Any other processor type: `Unsupported` (data passes through, every item `unverified`).
+- **Processor node names**: `<collector>/<processor id>`, or `<collector>/<pipeline>/<processor id>` when the processor is used by several metrics pipelines of that collector.
+- Scenario runs: `internal/scenario.Run` validates the topology, then wires replay → sdk-env → the topology runner (collectors, following joins) → one backend node per backend → recording rules (metrics graph), then alerting rules and routing as separate stages logged with `graph.Record`.
+- **Golden tests** (`internal/scenario/golden_test.go`) run every scenario in `testdata/thin-slice` and `testdata/agent-gateway` and compare whole reports exactly, event IDs and topology problems included. To change a golden report deliberately: `go test ./internal/scenario -update`, then review the diff and note why in that fixture directory's README.
 - **Report** (`internal/report`): see Lineage and reports.
 - **CLI** (`cmd/otelcov`): `otelcov scenario [-root dir] [-json] scenario.yaml...`; exit status 1 if anything is not covered, 2 on errors.
 
 ### Snapshot metadata
 
-- Today: `recorded_at` and `pods` (pod specs at recording time).
-- Planned (decision 40): each collector instance's resourcedetection output.
+- `recorded_at` and `pods` (pod specs at recording time).
+- `resource_detection` (decision 40; format is an unconfirmed default): by collector, then processor ID, the processor's `config` at recording time and the detected `values` per Kubernetes node name (daemonsets) or `*`:
+
+  ```yaml
+  resource_detection:
+    agent:
+      resourcedetection:
+        config: { detectors: [env, system], override: false }
+        values:
+          kind-worker: { host.name: kind-worker, os.type: linux }
+  ```
+- How the capture step gets these values from a running cluster is still open.
 
 ### Lineage and reports
 
 - **Structured events**: `{id, node, signal, attribute?, action, value?, simulated?, reason?, detail?}`.
-- Actions: `attributed`, `associated`, `set`, `kept`, `removed`, `skipped`, `derived`, `dropped`, `routed`, `unverified` (the node can't tell what really happens; reason says why).
+- Actions: `attributed`, `associated`, `set`, `kept`, `removed`, `skipped`, `derived`, `dropped`, `routed`, `exported` (left the modeled system through an external exporter), `unverified` (the node can't tell what really happens; reason says why).
+- Signal ID prefixes: `s` recorded, `c` copies and processor-made items, `p` stored series, `r` rule outputs, `a` alerts.
 - **Record non-events** (`skipped`): in the motivating bug, the root cause is something that *didn't* happen.
-- Report sections: `summary` (per requirement and pod: status, path, receiver or `broken_at`), `diagnosis` (event chain from the break back to the root cause, plus hints), `signals`, `events`.
+- Report sections: `summary` (per requirement and pod: status, path, receiver or `broken_at`), `diagnosis` (event chain from the break back to the root cause, plus hints), `topology` (validation problems, when there are any), `signals`, `events`.
 - Statuses: `covered`, `covered_simulated` (path needs an attribute only sdk-env provided; listed in `simulated_by`), `not_covered`, `unverified` (no telemetry from the pod, or an `unverified` event on the path; listed in `unverified_by`).
 - How the report answers a requirement (`internal/report`):
   - **Sources**: recorded signals of the requirement's metric that sdk-env attributed to the pod and container (or, without attribution and without a required container, that k8sattributes associated with the pod). None: `unverified`, `broken_at: source/otlp-replay`.
   - **Forward search** through `from` links to the requirement's alert, routed to its receiver.
   - **Relevance**: attribute-level events only count if the path *needs* the attribute: it's promoted to a label that a selector matcher (one that doesn't match the empty string) or a route matcher on the path requires (`job` ← `service.name`, `instance` ← `service.instance.id`). So `k8s.pod.uid` being simulated doesn't make a path `covered_simulated` unless something needs it.
   - **Breaks**: the deepest non-`target_info` signal with a `dropped` event (else `unverified`) gives `broken_at`. An alert routed elsewhere breaks at `alertmanager/route`.
-  - **Diagnosis**: from the drop, the missing label → the backend's `skipped` promotion of the attribute it comes from (label names via Prometheus's own `LabelNamer`) → the last collector or sdk-env event on the recorded signal that skipped, removed or couldn't verify that attribute. Explanations are generated from those events; hints are specific for known root causes (k8sattributes container identification, sdk-env removal) and generic otherwise.
+  - **Diagnosis**: from the drop, the missing label → the backend's `skipped` promotion of the attribute it comes from (label names via Prometheus's own `LabelNamer`) → the last collector or sdk-env event on the recorded signal that skipped, removed or couldn't verify that attribute. Explanations are generated from those events; hints are specific for known root causes (k8sattributes container identification, sdk-env removal, a transform statement whose condition is false) and generic otherwise.
 
 ### Time
 
@@ -250,12 +287,26 @@ Other deployment patterns and backends come later, as adapters.
 | 44 | Alerts are a small Go type of our own, the one exception to decision 35 | `plog` log records | Alerts have state over time and a fixed schema; no collector code runs on them, and Alertmanager needs plain label sets anyway |
 | 45 | Prometheus and Alertmanager at the versions collector-contrib 0.135 uses (Prometheus commit `419d436a447a`, Alertmanager v0.28.1); OTLP → series uses Prometheus's own translator (`prometheusremotewrite`) | Mimir's fork of the translator (AGPL, can't be imported) | Real code; versions consistent with the collector pin |
 | 46 | Coverage ignores values: rules (recording and alerting) are rewritten so comparisons become `bool` and `topk`/`bottomk`/`limitk`/`limit_ratio` pass their input through, then evaluated with the real engine; `for` is treated as met | Strip comparisons and evaluate the left side; explainer only | Owner's point: thresholds don't change *whether* a series is watched, only labels and matching do. The rewrite keeps the real engine as the check on the explainer. Whether thresholds are *realistic* (units, impossible values) is a separate, later check |
+| 47 | Next after the thin slice: agent + gateway topology support, and real collector-contrib processor nodes with OTTL statement explanations; then test against a kind cluster running that topology | Stepped time; Loki/LogQL; dashboards | The owner's stack is agents + gateway, and the processors are where coverage silently breaks |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
 Treat these as open; ask before building on them.
 
 - **Pod association for replays**: the tap runs `k8sattributes` in `passthrough` mode so recordings carry `k8s.pod.ip` (a file has no client connection). Alternative: SDKs set `k8s.pod.uid` via the downward API and the tap stays processor-free.
+
+Chosen while building decision 47 (the owner was away); each is easy to change:
+
+- **Topology file additions**: `tap` names the tap pipeline (the draft had `tap: true`); `env` gives values for `${env:VAR}` references (unresolved ones stay as written and give a warning); `feature_gates` per collector.
+- **Validation severities** (see Topology). **This deviates from decision 26**, which says validation failures make paths `unverified`: missing configs, joins from undefined or unused exporters, and conflicting feature gates are **fatal** instead, because the run can't model those collectors at all. Mismatched ports and protocols follow decision 26 (`unverified`).
+- **Conflicting feature gates are fatal**: one otelcov process has one gate registry, so two collectors can't have different settings for the same gate.
+- **Bad joins still pass data**, with an `unverified` event per item, so problems further down the path are still found.
+- **Fan-out copies**: new `c` IDs, node `topology`, action `derived`; the first branch keeps the original IDs. `exported` is a new action for external exporters.
+- **Processor node names**: `<collector>/<processor id>`, with the pipeline added only when the processor is shared by several pipelines.
+- **memory_limiter is a pass-through**, like batch. Under real memory pressure it refuses data; that's runtime state, not config.
+- **transform, filter and metricstransform always run in the metric unit**, rather than choosing the unit from their statements (decision 39 allows either). Item-level behavior is the same; it only costs precision when a group's outputs can't be matched to single inputs.
+- **resource_detection snapshot format** (see Snapshot metadata), keyed by collector then processor ID, with the processor's config recorded so changed detector settings give `unverified`. A gateway's values should be under `*`: per-node keys are looked up by the *app* pod's node, which is only right for daemonsets.
+- **Statement replay**: a `skipped` statement is hidden when another statement set the same attribute, so the diagnosis doesn't blame a statement that didn't matter.
 - **Report schema details**: signal ID prefixes (`s`, `p`, `r`, `a`), field names, the `covered_simulated` status.
 - **Repository layout**: fixtures in `testdata/` (Go convention).
 
@@ -273,7 +324,9 @@ Treat these as open; ask before building on them.
 
 - **PR what-ifs on Deployment templates**: fixtures keep pod names and IPs stable. A real PR changes a template, so the checker must map recorded pods to their owner and apply the new template.
 - **LogQL evaluation**: when and how to evaluate line filters and parsers (`|= "error"`, `| json`); until then they're `unverified`.
-- **Snapshot metadata contents**: pod specs today; which other configs (collector config SHAs, ServiceMonitors) to store.
+- **Snapshot metadata contents**: pod specs and resourcedetection values today; which other configs (collector config SHAs, ServiceMonitors) to store.
+- **Capturing resourcedetection values**: how the capture step learns what each agent detected (e.g. from the agent's own tap of its post-processor output, or by running the detectors once per node).
+- **Per-instance differences between agents**: the runner treats every agent instance as running the same config; only resourcedetection values differ per node.
 - **Version pinning mechanism** for collector-contrib (builder manifest field, check against deployed version?).
 - **Repository conventions**: Go module path, CI setup, contribution guidelines.
 
@@ -286,10 +339,12 @@ Treat these as open; ask before building on them.
 - **File exporter**: `format` is `json` or `proto`; `rotation` has `max_megabytes`, `max_days`, `max_backups`, `localtime`; `append` and `rotation` can't be combined; whether `compression: zstd` works with JSON is unconfirmed.
 - **ServiceMonitor relabelings** are already applied by the time data reaches the tap, so a snapshot can't test a PR that changes them. With the OTel Operator's Target Allocator, its API lists every scrape target; relabeling can run on Prometheus's own relabel package.
 - **Changes left of the tap** (SDK env vars, app instrumentation) are baked into recordings; only sdk-env can simulate them.
-- **Real processors don't explain non-events**; that's why k8sattributes is custom.
+- **Real processors don't explain non-events**; that's why k8sattributes is custom, and why transform statements are replayed one at a time to find the ones whose condition was false.
+- **Transform-only OTTL functions** (`convert_sum_to_gauge`, `extract_sum_metric`, ...) live in the transform processor, not in `pkg/ottl`'s standard functions, so the statement replay can't run them; the processor itself still does.
+- **OTLP receiver default endpoints** are `localhost:4317` (gRPC) and `localhost:4318` (HTTP) since collector 0.104, so a receiver config without `endpoint` isn't reachable from other pods.
 - **Build environment**: Claude's cloud workspace has Go 1.24 and can fetch modules hosted on GitHub via `GOPROXY=direct`, but not `proxy.golang.org`, `sum.golang.org`, the Go toolchain downloads, or custom import paths (`golang.org/x`, `go.opentelemetry.io`, `google.golang.org`, `gopkg.in`, `k8s.io`). `pdata` v1.69.0 needs Go 1.26 and several of those paths.
 - **Collector compatibility**: `pdata` (v1) follows Go's compatibility promise and OTLP is wire-stable, but most collector-contrib modules are v0 and component *output* can change between versions (alpha/beta components, feature gates flipping). Hence the version pin.
-- **Feature gates are config.** Collectors run with `--feature-gates`; nodes must apply the same gate settings, or processors behave differently. Not yet handled.
+- **Feature gates are config.** Collectors run with `--feature-gates`; nodes must apply the same gate settings, or processors behave differently. The topology file lists them per collector; otelcov applies them to the process-wide registry, so two collectors can't set one gate differently.
 - **One binary links one version of each module.** If agent and gateway run different collector-contrib versions, one otelcov build can only match one of them.
 - **promtool unit tests** compare alert annotations exactly; keep test annotations deterministic.
 
@@ -327,6 +382,10 @@ GOFLAGS=-mod=vendor go test ./...
 
 ```sh
 GOFLAGS=-mod=vendor go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/*.yaml
+GOFLAGS=-mod=vendor go run ./cmd/otelcov scenario testdata/agent-gateway/scenarios/*.yaml
+
+# After editing a config on purpose, refresh its sha256 in the topology file
+sha256sum testdata/agent-gateway/collector/*.yaml
 ```
 
 ### Fixtures
@@ -356,7 +415,8 @@ internal/unit             items, metric groups and Prometheus-shaped series item
 internal/graph            node interfaces, runner, PassThrough, Unsupported
 internal/kube             loading pods, env var resolution (downward API, $(VAR))
 internal/otelenv          SDK resource from OTEL_RESOURCE_ATTRIBUTES / OTEL_SERVICE_NAME
-internal/collector        minimal collector config reader
+internal/collector        minimal collector config reader, ${env:VAR} substitution
+internal/topology         topology file, validation, the runner that follows joins
 internal/promqlx          real PromQL engine over in-memory series; the label-flow explainer
 internal/rulefile         rule files (rulefmt), dependency order
 internal/ruleeval         one expression for coverage: rewrite, engine, explainer, parents
@@ -365,7 +425,9 @@ internal/requirements     coverage requirements (OTel terms)
 internal/report           summary, diagnosis
 internal/scenario         scenario loading, runs, golden tests
 internal/nodes/...        one package per node; nodetest has test helpers
+internal/nodes/realproc   real collector-contrib processors, OTTL statement and condition explanations
 .github/workflows/ci.yml      gofmt, tidy, vet, tests, fixture check
 .github/workflows/vendor.yml  vendors dependencies onto deps/<branch>
 testdata/thin-slice/      fixtures for the first slice; see its README
+testdata/agent-gateway/   daemonset agents + gateway fixtures; see its README
 ```

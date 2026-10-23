@@ -38,6 +38,7 @@ type MetricsNode interface {
 // RunMetrics reads from src and passes the items through nodes in order,
 // recording all lineage in log. It returns the final items.
 func RunMetrics(ctx context.Context, src MetricsSource, nodes []MetricsNode, log *lineage.Log) ([]unit.Metric, error) {
+	defer Shutdown(ctx, nodes)
 	out, err := src.ReadMetrics(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", src.Name(), err)
@@ -45,7 +46,11 @@ func RunMetrics(ctx context.Context, src MetricsSource, nodes []MetricsNode, log
 	if err := apply(src.Name(), out, log); err != nil {
 		return nil, err
 	}
-	items := out.Items
+	return Process(ctx, nodes, out.Items, log)
+}
+
+// Process passes items through nodes in order, recording lineage in log.
+func Process(ctx context.Context, nodes []MetricsNode, items []unit.Metric, log *lineage.Log) ([]unit.Metric, error) {
 	for _, n := range nodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -60,6 +65,33 @@ func RunMetrics(ctx context.Context, src MetricsSource, nodes []MetricsNode, log
 		items = out.Items
 	}
 	return items, nil
+}
+
+// ReadSource reads a source and records its lineage.
+func ReadSource(ctx context.Context, src MetricsSource, log *lineage.Log) ([]unit.Metric, error) {
+	out, err := src.ReadMetrics(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", src.Name(), err)
+	}
+	if err := apply(src.Name(), out, log); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+// Shutdowner is implemented by nodes that hold resources, such as running
+// collector processors.
+type Shutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+// Shutdown stops every node that needs it.
+func Shutdown(ctx context.Context, nodes []MetricsNode) {
+	for _, n := range nodes {
+		if s, ok := n.(Shutdowner); ok {
+			_ = s.Shutdown(ctx)
+		}
+	}
 }
 
 // apply logs a node's output and checks the lineage invariants.

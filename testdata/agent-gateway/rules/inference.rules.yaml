@@ -1,0 +1,16 @@
+groups:
+  - name: inference.vllm
+    interval: 1m
+    rules:
+      # Per pod, for the owning team. team is set by the gateway's transform.
+      - record: team:vllm_memory_bytes:max
+        expr: |
+          max by (k8s_cluster_name, k8s_namespace_name, k8s_pod_name, team) (
+            process_memory_usage_bytes{job="vllm", k8s_container_name="vllm", team="inference"}
+          )
+
+      - alert: VLLMMemoryHigh
+        expr: team:vllm_memory_bytes:max > 12e9
+        for: 10m
+        labels:
+          severity: page

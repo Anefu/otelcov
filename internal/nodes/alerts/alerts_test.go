@@ -25,7 +25,7 @@ func TestThresholdsIgnored(t *testing.T) {
 	n := New([]rulefile.Alerting{{
 		Alert: "QueueBacklog", Expr: expr,
 		Labels: map[string]string{"severity": "page", "summary_level": "{{ $labels.job }}"},
-	}}, at)
+	}}, at, nil)
 	out, err := n.Process(context.Background(), []unit.Metric{
 		series("p1", 5, "__name__", "queue_depth", "job", "a"),   // below threshold
 		series("p2", 500, "__name__", "queue_depth", "job", "b"), // above

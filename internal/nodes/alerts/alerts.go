@@ -8,7 +8,6 @@ package alerts
 import (
 	"context"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,17 +32,21 @@ type Node struct {
 	rules  []rulefile.Alerting
 	at     time.Time
 	engine *promqlx.Engine
+	ids    *lineage.IDs
 }
 
-// New builds the node.
-func New(rs []rulefile.Alerting, at time.Time) *Node {
-	return &Node{rules: rs, at: at, engine: promqlx.NewEngine()}
+// New builds the node. ids hands out alert IDs (a1, a2, ...); nil gives the
+// node its own.
+func New(rs []rulefile.Alerting, at time.Time, ids *lineage.IDs) *Node {
+	if ids == nil {
+		ids = lineage.NewIDs("a")
+	}
+	return &Node{rules: rs, at: at, engine: promqlx.NewEngine(), ids: ids}
 }
 
 // Process evaluates every alerting rule over items.
 func (n *Node) Process(ctx context.Context, items []unit.Metric) (alerting.Output, error) {
 	var out alerting.Output
-	next := 0
 	for _, r := range n.rules {
 		if err := ctx.Err(); err != nil {
 			return alerting.Output{}, err
@@ -54,8 +57,7 @@ func (n *Node) Process(ctx context.Context, items []unit.Metric) (alerting.Outpu
 		templated := templatedLabels(r.Labels)
 
 		for _, o := range res.Outputs {
-			next++
-			id := lineage.SignalID("a" + strconv.Itoa(next))
+			id := n.ids.Next()
 			from := rules.IDs(items, o.Parents)
 			b := labels.NewBuilder(o.Labels).Del(labels.MetricName)
 			for k, v := range r.Labels {

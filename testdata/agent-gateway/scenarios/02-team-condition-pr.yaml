@@ -1,0 +1,14 @@
+# A PR changes the gateway's team statement to namespace inference-prod. team is no longer set, so the rule's team="inference" matcher drops both pods.
+name: 02-team-condition-pr
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  recording: ../recordings/staging.otlp.jsonl
+  snapshot: ../recordings/staging.meta.yaml
+
+config:
+  pods: ../k8s/pods.yaml
+  topology: ../topology-pr.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/02-team-condition-pr.report.json

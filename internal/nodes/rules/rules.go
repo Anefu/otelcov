@@ -9,7 +9,6 @@ package rules
 import (
 	"context"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/prometheus/prometheus/model/labels"
@@ -30,27 +29,31 @@ type Node struct {
 	rules  []rulefile.Recording
 	at     time.Time
 	engine *promqlx.Engine
+	ids    *lineage.IDs
 }
 
-// New builds the node. Rules are reordered by dependency.
-func New(rules []rulefile.Recording, at time.Time) (*Node, error) {
+// New builds the node. Rules are reordered by dependency. ids hands out
+// output IDs (r1, r2, ...); nil gives the node its own.
+func New(rules []rulefile.Recording, at time.Time, ids *lineage.IDs) (*Node, error) {
 	ordered, err := rulefile.OrderRecording(rules)
 	if err != nil {
 		return nil, err
 	}
-	return &Node{rules: ordered, at: at, engine: promqlx.NewEngine()}, nil
+	if ids == nil {
+		ids = lineage.NewIDs("r")
+	}
+	return &Node{rules: ordered, at: at, engine: promqlx.NewEngine(), ids: ids}, nil
 }
 
 func (n *Node) Name() string { return "rules" }
 
 func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Output, error) {
 	out := graph.Output{Items: append([]unit.Metric(nil), in...)}
-	next := 0
 	for _, r := range n.rules {
 		if err := ctx.Err(); err != nil {
 			return graph.Output{}, err
 		}
-		res := n.evaluate(ctx, r, out.Items, &next)
+		res := n.evaluate(ctx, r, out.Items)
 		out.Items = append(out.Items, res.Items...)
 		out.Events = append(out.Events, res.Events...)
 		out.Signals = append(out.Signals, res.Signals...)
@@ -58,15 +61,14 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 	return out, nil
 }
 
-func (n *Node) evaluate(ctx context.Context, r rulefile.Recording, items []unit.Metric, next *int) graph.Output {
+func (n *Node) evaluate(ctx context.Context, r rulefile.Recording, items []unit.Metric) graph.Output {
 	name := Prefix + r.Record
 	res := ruleeval.Evaluate(ctx, n.engine, r.Expr, items, n.at)
 	var ev Positioned
 
 	var out graph.Output
 	for _, o := range res.Outputs {
-		*next++
-		id := lineage.SignalID("r" + strconv.Itoa(*next))
+		id := n.ids.Next()
 		from := IDs(items, o.Parents)
 		b := labels.NewBuilder(o.Labels).Set(labels.MetricName, r.Record)
 		for k, v := range r.Labels {

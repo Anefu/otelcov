@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -40,10 +41,31 @@ type Pipeline struct {
 // Load reads a collector config. Environment variable references are not
 // expanded.
 func Load(path string) (*Config, error) {
+	return LoadWithEnv(path, nil)
+}
+
+// envRef matches ${env:VAR} and ${VAR}, as the collector's config resolver
+// does.
+var envRef = regexp.MustCompile(`\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
+
+// LoadWithEnv reads a collector config, replacing ${env:VAR} and ${VAR}
+// references with values from env (or their :-default). References without a
+// value stay as written, so checks that depend on them can say so.
+func LoadWithEnv(path string, env map[string]string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	data = envRef.ReplaceAllFunc(data, func(m []byte) []byte {
+		sub := envRef.FindSubmatch(m)
+		if v, ok := env[string(sub[1])]; ok {
+			return []byte(v)
+		}
+		if len(sub[2]) > 0 {
+			return sub[2]
+		}
+		return m
+	})
 	var c Config
 	if err := yaml.UnmarshalStrict(data, &c); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
@@ -86,3 +108,6 @@ func Decode(raw map[string]any, into any) error {
 	dec.DisallowUnknownFields()
 	return dec.Decode(into)
 }
+
+// Unresolved reports whether a value still holds an env reference.
+func Unresolved(v string) bool { return envRef.MatchString(v) }

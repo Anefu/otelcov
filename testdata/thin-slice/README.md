@@ -31,11 +31,12 @@ The story: staging runs single-container pods; a PR adds a sidecar and is caught
 | `recordings/*.otlp.jsonl` | Tap output: one OTLP/JSON export request per line, as the file exporter writes it |
 | `recordings/*.meta.yaml` | Snapshot metadata: the pod specs that were running when it was recorded |
 | `k8s/pods-*.yaml` | Pods as the API returns them (spec + status) |
+| `topology.yaml` | One collector (`collector`, tapped at `metrics/tap`) joined to the Mimir backend; rules read Mimir, Alertmanager reads the rules |
 | `collector/collector.yaml` | Staging collector: the real `metrics` pipeline, plus the `metrics/tap` pipeline that produces recordings |
 | `backend/mimir-otlp.yaml` | Mimir limits that decide which resource attributes become labels |
 | `rules/`, `alertmanager/` | The rule file and routing tree |
 | `requirements/vllm.yaml` | What "covered" means for this slice |
-| `scenarios/*.yaml` | One run each: data + config + requirements + expected report |
+| `scenarios/*.yaml` | One run each: data + config (pods + topology) + requirements + expected report |
 | `expected/*.report.json` | Golden reports |
 | `promtool/inference.rules.test.yaml` | Cross-checks the rule and alert nodes with the real Prometheus engine |
 
@@ -92,3 +93,4 @@ otelcol-contrib validate --config=collector/collector.yaml
 - **Rule node built** with the real PromQL engine: rule `derived` details now carry the rule expression in Prometheus's canonical form (`expr`), instead of hand-split `selector` and `aggregation` strings.
 - **Alert and route nodes built**: alert `derived` details now carry the expression, what was evaluated after the threshold rewrite, and `for`; route matchers are in Alertmanager's own order (sorted by label name); routing events follow all alert events, since each stage logs in turn.
 - **Report built**: the golden test now compares whole reports exactly, event IDs included. The diagnosis explanation is now generated from the lineage (it names the rule, the matcher, the missing label, the attribute it comes from, and the root cause's own reason) instead of hand-written prose.
+- **Topology runner**: scenarios now name a topology file (`config: {pods, topology}`) instead of each config separately. The collector is named `collector` in `topology.yaml`, so node names (`collector/k8sattributes`) and the golden reports are unchanged.

@@ -1,0 +1,14 @@
+# The agent sends gRPC to the gateway's HTTP port. Validation can't trust the join, so everything behind it is unverified.
+name: 03-bad-join
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  recording: ../recordings/staging.otlp.jsonl
+  snapshot: ../recordings/staging.meta.yaml
+
+config:
+  pods: ../k8s/pods.yaml
+  topology: ../topology-badjoin.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/03-bad-join.report.json
