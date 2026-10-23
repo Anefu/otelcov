@@ -1,6 +1,6 @@
 # Agent + gateway fixtures
 
-Hand-written inputs and golden reports for the owner's topology: OpenTelemetry Collector **daemonset agents** (tapped) forwarding to a **gateway**, which writes to Mimir. Every processor runs as real collector-contrib code (0.135), except `k8sattributes` and `resourcedetection`, which are custom nodes, and `batch` / `memory_limiter`, which pass data through unchanged.
+Hand-written inputs and golden reports for the owner's topology: OpenTelemetry Collector **daemonset agents** (tapped) forwarding to a **gateway**, which writes to Mimir. Every processor runs as real collector-contrib code (0.134), except `k8sattributes` and `resourcedetection`, which are custom nodes, and `batch` / `memory_limiter`, which pass data through unchanged.
 
 The data and configs are synthetic, shaped like a small kind cluster (`kind-worker`, `kind-worker2`), so the same scenarios can be re-run later against a real recording from a kind cluster.
 

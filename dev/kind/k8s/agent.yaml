@@ -51,7 +51,7 @@ spec:
       serviceAccountName: otel-agent
       containers:
         - name: collector
-          image: otel/opentelemetry-collector-contrib:0.135.0
+          image: otel/opentelemetry-collector-contrib:0.134.1
           args: ["--config=/conf/agent.yaml"]
           env:
             - name: K8S_NODE_NAME
