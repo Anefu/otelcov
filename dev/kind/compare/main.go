@@ -114,7 +114,7 @@ func run(ctx context.Context, o options, paths []string, w io.Writer, page *html
 		if err != nil {
 			return false, fmt.Errorf("%s: %w", s.Name, err)
 		}
-		sc := htmlreport.Scenario{Report: rep, Flow: flow}
+		sc := htmlreport.Scenario{Description: s.Description, Report: rep, Flow: flow}
 		why, err := notDeployed(ctx, o, s)
 		if err != nil {
 			return false, err

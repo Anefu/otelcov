@@ -31,8 +31,10 @@ type Data struct {
 
 // Scenario is one scenario's report and flow graph.
 type Scenario struct {
-	Report *report.Report  `json:"report"`
-	Flow   flowgraph.Graph `json:"flow"`
+	// Description says what the scenario changes (from the scenario file).
+	Description string          `json:"description,omitempty"`
+	Report      *report.Report  `json:"report"`
+	Flow        flowgraph.Graph `json:"flow"`
 	// Truth is what the real stack did, by "requirement|pod", when compare
 	// checked this scenario.
 	Truth map[string]Truth `json:"truth,omitempty"`

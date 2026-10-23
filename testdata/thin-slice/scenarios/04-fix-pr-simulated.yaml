@@ -2,6 +2,7 @@
 # OTEL_RESOURCE_ATTRIBUTES on the vllm container. The snapshot predates the env
 # var, so sdk-env simulates it: vllm-embed comes out "covered_simulated".
 name: 04-fix-pr-simulated
+description: "A PR adds the sidecar and names the container in OTEL_RESOURCE_ATTRIBUTES."
 eval_time: 2026-10-23T10:00:30Z
 
 data:

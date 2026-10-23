@@ -72,6 +72,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 .matrix th, .matrix td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
 .matrix thead th { padding: 0 12px 10px 0; font-weight: 600; white-space: nowrap; }
 .matrix thead th .sub { display: block; font-weight: 400; color: var(--muted); font-size: 0.85rem; }
+.matrix thead th .desc { display: block; font-weight: 400; color: var(--ink); font-size: 0.88rem; line-height: 1.35; white-space: normal; max-width: 30ch; margin-top: 2px; }
 .matrix tbody th { padding: 12px 20px 12px 0; font-weight: 600; white-space: nowrap; }
 .matrix tbody th .sub { display: block; font-weight: 400; color: var(--muted); font-size: 0.85rem; }
 .matrix td { padding: 6px 12px 6px 0; min-width: 200px; }
@@ -100,6 +101,8 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 .route-head { display: grid; gap: 4px; padding-top: 20px; border-top: 2px solid var(--ink); }
 .route-head h2 { font-size: 1.6rem; }
 .route-head .verdict { margin: 0; font-size: 1.1rem; }
+.route-head .context { margin: 0; color: var(--muted); }
+.route-head .context b { color: var(--ink); }
 .route-head .verdict b { font-weight: 700; }
 .notes { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; max-width: 80ch; }
 .notes li { padding-left: 14px; border-left: 3px solid var(--rule); }
@@ -320,7 +323,9 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
       if (times.length > 1) sub.push(sc.report.eval_time);
       if (probs) sub.push(probs === 1 ? "1 input problem" : probs + " input problems");
       if (sc.not_compared) sub.push("not compared with the real stack");
-      head.appendChild(h("th", { scope: "col" }, sc.report.scenario, sub.length ? h("span", { class: "sub", text: sub.join("; ") }) : null));
+      head.appendChild(h("th", { scope: "col" }, sc.report.scenario,
+        sc.description ? h("span", { class: "desc", text: sc.description }) : null,
+        sub.length ? h("span", { class: "sub", text: sub.join("; ") }) : null));
     });
     var body = h("tbody");
     rows.forEach(function (row) {
@@ -529,7 +534,9 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 
     sec.appendChild(h("header", { class: "route-head" },
       h("h2", null, row.pod),
-      h("p", { class: "verdict" }, h("b", { text: sc.report.scenario }), ", requirement ", code(e.requirement), ". ", verdict)));
+      h("p", { class: "context" }, h("b", { text: sc.report.scenario }), ". ",
+        sc.description ? sc.description + " " : "", "Requirement ", code(e.requirement), "."),
+      h("p", { class: "verdict" }, verdict)));
     if (notes.childNodes.length) sec.appendChild(notes);
 
     // The strip map.

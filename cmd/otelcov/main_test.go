@@ -46,7 +46,7 @@ func TestScenarioCommand(t *testing.T) {
 	if code := run([]string{"scenario", "-html", page, "../../testdata/agent-gateway/scenarios/01-baseline.yaml"}, &out, &errs); code != 0 {
 		t.Fatalf("exit %d, want 0; stderr: %s", code, errs.String())
 	}
-	if b, err := os.ReadFile(page); err != nil || !strings.Contains(string(b), `"scenario":"01-baseline"`) {
+	if b, err := os.ReadFile(page); err != nil || !strings.Contains(string(b), `"scenario":"01-baseline"`) || !strings.Contains(string(b), `"description":"The configs as deployed."`) {
 		t.Errorf("report page: %v", err)
 	}
 
