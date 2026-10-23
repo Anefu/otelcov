@@ -1,0 +1,18 @@
+recorded_at: 2026-10-23T10:00:00Z
+pods: ../k8s/pods.yaml
+# What each resourcedetection processor found, by collector then processor
+# ID: its config at recording time, and the detected attributes per
+# Kubernetes node (the agent is a daemonset).
+resource_detection:
+  agent:
+    resourcedetection:
+      config:
+        detectors: [env, system]
+        override: false
+      values:
+        kind-worker:
+          host.name: kind-worker
+          os.type: linux
+        kind-worker2:
+          host.name: kind-worker2
+          os.type: linux

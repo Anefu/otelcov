@@ -1,0 +1,13 @@
+requirements:
+  - id: vllm-memory-watched
+    description: Every vLLM pod's memory is watched by VLLMMemoryHigh, which pages the inference team.
+    for_each_pod:
+      namespace: inference
+      selector:
+        app.kubernetes.io/name: vllm
+    signal:
+      metric: process.memory.usage
+      container: vllm
+    must_reach:
+      alert: VLLMMemoryHigh
+      receiver: inference-pager

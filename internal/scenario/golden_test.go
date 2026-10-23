@@ -10,46 +10,53 @@ import (
 	"testing"
 )
 
-const fixtures = "../../testdata/thin-slice"
+// fixtures are the directories with scenarios and golden reports.
+var fixtures = []string{"../../testdata/thin-slice", "../../testdata/agent-gateway"}
 
 var update = flag.Bool("update", false, "rewrite the golden reports from the current output (review the diff before committing)")
 
 // TestGoldenReports runs every scenario and compares the whole report with
 // its golden file: summary, diagnosis, every signal and every event.
 func TestGoldenReports(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join(fixtures, "scenarios", "*.yaml"))
-	if err != nil || len(paths) == 0 {
-		t.Fatalf("no scenarios found: %v", err)
+	for _, dir := range fixtures {
+		paths, err := filepath.Glob(filepath.Join(dir, "scenarios", "*.yaml"))
+		if err != nil || len(paths) == 0 {
+			t.Fatalf("no scenarios found in %s: %v", dir, err)
+		}
+		for _, path := range paths {
+			golden(t, dir, path)
+		}
 	}
-	for _, path := range paths {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			s, err := Load(path, fixtures)
-			if err != nil {
+}
+
+func golden(t *testing.T, dir, path string) {
+	t.Run(filepath.Base(dir)+"/"+filepath.Base(path), func(t *testing.T) {
+		s, err := Load(path, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep, err := Report(context.Background(), s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := roundTrip(t, rep)
+		if *update {
+			b, _ := json.MarshalIndent(rep, "", "  ")
+			if err := os.WriteFile(s.Expected, append(b, '\n'), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			rep, err := Report(context.Background(), s)
-			if err != nil {
-				t.Fatal(err)
+			return
+		}
+		want := loadGolden(t, s.Expected)
+		for _, section := range []string{"scenario", "eval_time", "summary", "diagnosis", "topology", "signals", "events"} {
+			diff(t, section, got[section], want[section])
+		}
+		for k := range want {
+			if _, ok := got[k]; !ok {
+				t.Errorf("report lacks golden section %q", k)
 			}
-			got := roundTrip(t, rep)
-			if *update {
-				b, _ := json.MarshalIndent(rep, "", "  ")
-				if err := os.WriteFile(s.Expected, append(b, '\n'), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			want := loadGolden(t, s.Expected)
-			for _, section := range []string{"scenario", "eval_time", "summary", "diagnosis", "signals", "events"} {
-				diff(t, section, got[section], want[section])
-			}
-			for k := range want {
-				if _, ok := got[k]; !ok {
-					t.Errorf("report lacks golden section %q", k)
-				}
-			}
-		})
-	}
+		}
+	})
 }
 
 func loadGolden(t *testing.T, path string) map[string]any {

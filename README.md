@@ -4,7 +4,7 @@ Coverage and lineage for OpenTelemetry monitoring stacks.
 
 otelcov replays recorded telemetry through your collectors, backends, rules, alerts and dashboards to show which workloads are actually watched, explain where coverage breaks, and check pull requests before they merge.
 
-> **Status: early implementation.** The first end-to-end slice works: from recorded OTLP through the collector, Mimir, recording rules, alerts and Alertmanager routing, against the test fixtures in [`testdata/thin-slice/`](testdata/thin-slice/). It isn't ready to point at a real cluster yet. The design and its decisions live in [AGENTS.md](AGENTS.md).
+> **Status: early implementation.** Metrics work end to end, from recorded OTLP through daemonset agents and a gateway (real collector-contrib processors), Mimir, recording rules, alerts and Alertmanager routing, against the test fixtures in [`testdata/`](testdata/). It hasn't been run against a real cluster yet. The design and its decisions live in [AGENTS.md](AGENTS.md).
 
 ## The problem
 
@@ -31,7 +31,7 @@ apps → collectors (agent, gateway) → backends (Mimir, Loki) → recording ru
 
 ## Usage
 
-otelcov runs *scenarios*: a recording, the config under test (pods, collector, Mimir limits, rules, Alertmanager) and coverage requirements.
+otelcov runs *scenarios*: a recording, the config under test (pods, and a topology file naming the collector, Mimir, rules and Alertmanager configs and how they connect) and coverage requirements.
 
 ```console
 $ go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.yaml
@@ -45,6 +45,21 @@ $ go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.y
       fix: Or have the SDK send container.id, so k8sattributes can match the container.
 ```
 
+Processors explain themselves too. Here a pull request changes the condition of a gateway `transform` statement, and the rule's `team="inference"` matcher loses both pods:
+
+```console
+$ go run ./cmd/otelcov scenario testdata/agent-gateway/scenarios/02-team-condition-pr.yaml
+02-team-condition-pr (evaluated at 2026-10-23T10:00:30Z)
+  NOT COVERED          inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
+      path: s1 → p1 ✗ rule/team:vllm_memory_bytes:max
+      why: rule team:vllm_memory_bytes:max only selects series matching team="inference", and this pod's series has no team label, so it never reaches VLLMMemoryHigh. team comes from resource attribute team, which gateway/transform/team didn't set: resource statement `set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"` didn't run: its condition is false for this signal.
+      fix: Statement `set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"` in gateway/transform/team would set team=inference, but its condition is false for this pod.
+      fix: Fix the condition, or set team another way.
+  ...
+```
+
+The topology file is checked on every run: an exporter sending to the wrong port, a receiver listening on localhost only, or an exporter that isn't connected to anything is reported, and coverage through it is marked `unverified` or the run stops.
+
 `-json` prints the full report, with every signal and lineage event. The exit status is 1 when anything is not covered, so it can gate CI.
 
 ## Scope
@@ -57,7 +72,7 @@ otelcov builds on ideas from several tools that each cover part of the problem: 
 
 ## Contributing
 
-The project is at the design stage. Read [AGENTS.md](AGENTS.md) first: it holds every design decision so far, the alternatives considered, and the open questions. Issues and discussion are welcome.
+The project is at an early stage. Read [AGENTS.md](AGENTS.md) first: it holds every design decision so far, the alternatives considered, and the open questions. Issues and discussion are welcome.
 
 ## License
 

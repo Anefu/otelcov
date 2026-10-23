@@ -30,7 +30,7 @@ func item(id string, temporality pmetric.AggregationTemporality, name string) un
 }
 
 func TestBackend(t *testing.T) {
-	n := New(Limits{PromoteOTelResourceAttributes: "k8s.pod.name", OTelMetricSuffixesEnabled: true})
+	n := New("mimir", Limits{PromoteOTelResourceAttributes: "k8s.pod.name", OTelMetricSuffixesEnabled: true})
 	out, err := n.ProcessMetrics(context.Background(), []unit.Metric{
 		item("s1", pmetric.AggregationTemporalityCumulative, "http.server.duration"),
 		item("s2", pmetric.AggregationTemporalityCumulative, "queue.wait"),
@@ -69,7 +69,7 @@ func TestBackend(t *testing.T) {
 }
 
 func TestSamplesOfOneSeriesAreKept(t *testing.T) {
-	n := New(Limits{})
+	n := New("mimir", Limits{})
 	a := item("s1", pmetric.AggregationTemporalityCumulative, "requests")
 	b := item("s2", pmetric.AggregationTemporalityCumulative, "requests")
 	// Same series, a minute later.

@@ -37,6 +37,9 @@ const (
 	Dropped Action = "dropped"
 	// Routed: an alert reached a receiver.
 	Routed Action = "routed"
+	// Exported: the signal left the modeled system through an external
+	// exporter.
+	Exported Action = "exported"
 	// Unverified: the node can't tell what really happens to this signal.
 	// Everything downstream inherits the uncertainty.
 	Unverified Action = "unverified"
@@ -124,4 +127,19 @@ func (l *Log) Signals() []Signal {
 		out[i] = l.signals[id]
 	}
 	return out
+}
+
+// IDs hands out new signal IDs with a prefix: c1, c2, ...
+type IDs struct {
+	prefix string
+	n      int
+}
+
+// NewIDs returns an allocator for IDs with the given prefix.
+func NewIDs(prefix string) *IDs { return &IDs{prefix: prefix} }
+
+// Next returns the next ID.
+func (i *IDs) Next() SignalID {
+	i.n++
+	return SignalID(i.prefix + strconv.Itoa(i.n))
 }

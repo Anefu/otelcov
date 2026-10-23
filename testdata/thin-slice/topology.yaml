@@ -1,0 +1,22 @@
+# One collector, tapped; Mimir; rules read Mimir; Alertmanager reads the rules.
+version: 1
+collectors:
+  collector:
+    config: collector/collector.yaml
+    tap: metrics/tap
+backends:
+  mimir-otlp:
+    type: mimir-otlp
+    config: backend/mimir-otlp.yaml
+consumers:
+  rules:
+    type: prometheus-rules
+    paths: [rules/inference.rules.yaml]
+    reads: mimir-otlp
+  alertmanager:
+    type: alertmanager
+    config: alertmanager/alertmanager.yaml
+    reads: rules
+joins:
+  - from: collector/exporters/otlphttp/mimir
+    to: mimir-otlp

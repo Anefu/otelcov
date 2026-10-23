@@ -65,3 +65,28 @@ func TestSplitAndGroup(t *testing.T) {
 		t.Errorf("merged has %d points", merged.DataPointCount())
 	}
 }
+
+func TestCombineMetric(t *testing.T) {
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("r", "1")
+	g := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	g.SetName("g")
+	dps := g.SetEmptyGauge().DataPoints()
+	for i := 0; i < 3; i++ {
+		dps.AppendEmpty().SetIntValue(int64(i))
+	}
+	var items []Metric
+	for _, p := range SplitMetrics(md) {
+		items = append(items, Metric{Data: p})
+	}
+	c := CombineMetric(items)
+	if c.ResourceMetrics().Len() != 1 || FirstMetric(c).Gauge().DataPoints().Len() != 3 {
+		t.Fatalf("want one metric with 3 points, got %d resources, %d points", c.ResourceMetrics().Len(), c.DataPointCount())
+	}
+	for i := 0; i < 3; i++ {
+		if v := FirstMetric(c).Gauge().DataPoints().At(i).IntValue(); v != int64(i) {
+			t.Errorf("point %d = %d", i, v)
+		}
+	}
+}

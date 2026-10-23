@@ -23,6 +23,7 @@ import (
 	"github.com/Anefu/otelcov/internal/nodes/source"
 	"github.com/Anefu/otelcov/internal/promqlx"
 	"github.com/Anefu/otelcov/internal/requirements"
+	"github.com/Anefu/otelcov/internal/topology"
 )
 
 // Statuses.
@@ -67,6 +68,8 @@ type Report struct {
 	Diagnosis []Diagnosis                         `json:"diagnosis"`
 	Signals   map[lineage.SignalID]lineage.Signal `json:"signals"`
 	Events    []lineage.Event                     `json:"events"`
+	// Topology lists non-fatal problems found validating the topology.
+	Topology []topology.Problem `json:"topology,omitempty"`
 }
 
 // Build answers the requirements from a run's lineage. pods are the pods of
@@ -347,7 +350,9 @@ func (ix *index) neededAttributes(path []lineage.SignalID, routed lineage.Event)
 	}
 	out := map[string]bool{}
 	for _, id := range path {
-		e, ok := ix.find(id, func(e lineage.Event) bool { return e.Node == mimir.Name && e.Action == lineage.Derived })
+		e, ok := ix.find(id, func(e lineage.Event) bool {
+			return strings.HasPrefix(e.Node, mimir.Prefix) && e.Action == lineage.Derived
+		})
 		if !ok {
 			continue
 		}
@@ -392,7 +397,7 @@ func (ix *index) diagnose(req requirements.Requirement, entry Entry, drop lineag
 	var backend lineage.Event
 	for i := len(entry.Path) - 1; i >= 0 && attr == ""; i-- {
 		for _, e := range ix.events[entry.Path[i]] {
-			if e.Node == mimir.Name && e.Action == lineage.Skipped && namer.Build(e.Attribute) == label {
+			if strings.HasPrefix(e.Node, mimir.Prefix) && e.Action == lineage.Skipped && namer.Build(e.Attribute) == label {
 				attr, backend = e.Attribute, e
 				break
 			}
@@ -433,6 +438,12 @@ func hints(req requirements.Requirement, attr string, root lineage.Event, matche
 			fmt.Sprintf("Set k8s.container.name=%s in OTEL_RESOURCE_ATTRIBUTES on the %s container.", c, c),
 			"Or have the SDK send container.id, so k8sattributes can match the container.",
 		}
+	case root.Action == lineage.Skipped && root.Detail["statement"] != nil:
+		h := fmt.Sprintf("Statement `%v` in %s doesn't run for this pod: its condition is false.", root.Detail["statement"], root.Node)
+		if v, ok := root.Detail["would_set"]; ok {
+			h = fmt.Sprintf("Statement `%v` in %s would set %s=%v, but its condition is false for this pod.", root.Detail["statement"], root.Node, attr, v)
+		}
+		return []string{h, fmt.Sprintf("Fix the condition, or set %s another way.", attr)}
 	case root.Node == sdkenv.Name && root.Action == lineage.Removed:
 		return []string{fmt.Sprintf("The change under test removes %s from the SDK environment; keep it, or relax %s in %s.", attr, matcher, where)}
 	}

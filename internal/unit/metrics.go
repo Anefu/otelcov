@@ -153,3 +153,53 @@ func MergeMetrics(parts ...pmetric.Metrics) pmetric.Metrics {
 	}
 	return out
 }
+
+// CombineMetric merges items of one metric (same resource, scope and metric
+// identity, as grouped by GroupByMetric) into a single Metrics with one
+// metric holding all their data points, in item order.
+func CombineMetric(items []Metric) pmetric.Metrics {
+	out := pmetric.NewMetrics()
+	if len(items) == 0 {
+		return out
+	}
+	first := items[0].Data.ResourceMetrics().At(0)
+	orm := out.ResourceMetrics().AppendEmpty()
+	first.Resource().CopyTo(orm.Resource())
+	orm.SetSchemaUrl(first.SchemaUrl())
+	fsm := first.ScopeMetrics().At(0)
+	osm := orm.ScopeMetrics().AppendEmpty()
+	fsm.Scope().CopyTo(osm.Scope())
+	osm.SetSchemaUrl(fsm.SchemaUrl())
+	om := osm.Metrics().AppendEmpty()
+	FirstMetric(items[0].Data).CopyTo(om)
+	for _, it := range items[1:] {
+		appendPoints(FirstMetric(it.Data), om)
+	}
+	return out
+}
+
+// appendPoints appends copies of the data points of src to dst (same type).
+func appendPoints(src, dst pmetric.Metric) {
+	switch src.Type() {
+	case pmetric.MetricTypeGauge:
+		for i := 0; i < src.Gauge().DataPoints().Len(); i++ {
+			src.Gauge().DataPoints().At(i).CopyTo(dst.Gauge().DataPoints().AppendEmpty())
+		}
+	case pmetric.MetricTypeSum:
+		for i := 0; i < src.Sum().DataPoints().Len(); i++ {
+			src.Sum().DataPoints().At(i).CopyTo(dst.Sum().DataPoints().AppendEmpty())
+		}
+	case pmetric.MetricTypeHistogram:
+		for i := 0; i < src.Histogram().DataPoints().Len(); i++ {
+			src.Histogram().DataPoints().At(i).CopyTo(dst.Histogram().DataPoints().AppendEmpty())
+		}
+	case pmetric.MetricTypeExponentialHistogram:
+		for i := 0; i < src.ExponentialHistogram().DataPoints().Len(); i++ {
+			src.ExponentialHistogram().DataPoints().At(i).CopyTo(dst.ExponentialHistogram().DataPoints().AppendEmpty())
+		}
+	case pmetric.MetricTypeSummary:
+		for i := 0; i < src.Summary().DataPoints().Len(); i++ {
+			src.Summary().DataPoints().At(i).CopyTo(dst.Summary().DataPoints().AppendEmpty())
+		}
+	}
+}

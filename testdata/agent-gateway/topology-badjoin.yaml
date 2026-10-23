@@ -1,0 +1,32 @@
+# Agent daemonset (tapped) -> gateway -> Mimir. Rules read Mimir;
+# Alertmanager reads the rules. debug leaves the modeled system.
+version: 1
+collectors:
+  agent:
+    config: collector/agent-badport.yaml
+    sha256: fa752c2192f93a598caa99b9a5e12e82fe6628b3c9e3ee66b7bc87101e6d767f
+    tap: metrics/tap
+  gateway:
+    config: collector/gateway.yaml
+    sha256: 3c602d561092fa2cae242e8074e1370e36ef10c74745206a9e2554ca52d35ddb
+backends:
+  mimir:
+    type: mimir-otlp
+    config: backend/mimir.yaml
+    sha256: 38a3060c209c98e72d0e0a290bab9ad0f1a05d53b6aae06e41fbec23987fc592
+consumers:
+  rules:
+    type: prometheus-rules
+    paths: [rules/inference.rules.yaml]
+    reads: mimir
+  alertmanager:
+    type: alertmanager
+    config: alertmanager/alertmanager.yaml
+    reads: rules
+external:
+  - gateway/exporters/debug
+joins:
+  - from: agent/exporters/otlp/gateway
+    to: gateway/receivers/otlp
+  - from: gateway/exporters/otlphttp/mimir
+    to: mimir

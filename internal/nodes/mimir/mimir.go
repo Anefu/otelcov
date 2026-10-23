@@ -28,8 +28,11 @@ import (
 	"github.com/Anefu/otelcov/internal/unit"
 )
 
-// Name is the node name used in lineage.
-const Name = "backend/mimir-otlp"
+// Prefix starts backend node names in lineage: "backend/<backend name>".
+const Prefix = "backend/"
+
+// Type is the topology backend type this node models.
+const Type = "mimir-otlp"
 
 // Limits are the Mimir per-tenant limits that shape OTLP ingestion.
 type Limits struct {
@@ -47,6 +50,7 @@ var identifying = map[string]bool{"service.name": true, "service.namespace": tru
 
 // Node is the Mimir OTLP backend node.
 type Node struct {
+	name     string
 	limits   Limits
 	promote  []string
 	settings prw.Settings
@@ -71,8 +75,9 @@ func Load(path string) (Limits, error) {
 	return l, nil
 }
 
-// New builds the node from Mimir limits.
-func New(l Limits) *Node {
+// New builds the node from Mimir limits. backend is the backend's name in the
+// topology; the node is named "backend/<backend>".
+func New(backend string, l Limits) *Node {
 	var promote []string
 	for _, a := range strings.Split(l.PromoteOTelResourceAttributes, ",") {
 		if a = strings.TrimSpace(a); a != "" {
@@ -80,6 +85,7 @@ func New(l Limits) *Node {
 		}
 	}
 	return &Node{
+		name:    Prefix + backend,
 		limits:  l,
 		promote: promote,
 		settings: prw.Settings{
@@ -94,7 +100,7 @@ func New(l Limits) *Node {
 	}
 }
 
-func (n *Node) Name() string { return Name }
+func (n *Node) Name() string { return n.name }
 
 // converted is one output series before IDs are assigned.
 type converted struct {
@@ -132,7 +138,7 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 			// The metric is rejected. target_info for its resource may still
 			// be written, so the remaining series are kept.
 			out.Events = append(out.Events, lineage.Event{
-				Node: Name, Signal: it.ID, Action: lineage.Dropped,
+				Node: n.name, Signal: it.ID, Action: lineage.Dropped,
 				Reason: "Mimir's OTLP translation rejects it: " + err.Error(),
 			})
 		}
@@ -174,11 +180,11 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 		data := unit.NewSeries(cv.lset, cv.samples...)
 		out.Items = append(out.Items, unit.Metric{ID: id, From: cv.from, Data: data})
 		out.Signals = append(out.Signals, lineage.Signal{
-			ID: id, Node: Name, Kind: "series", From: cv.from, Labels: cv.lset.Map(), Value: unit.LastValue(data),
+			ID: id, Node: n.name, Kind: "series", From: cv.from, Labels: cv.lset.Map(), Value: unit.LastValue(data),
 		})
 		if cv.target {
 			out.Events = append(out.Events, lineage.Event{
-				Node: Name, Signal: id, Action: lineage.Derived, From: cv.from,
+				Node: n.name, Signal: id, Action: lineage.Derived, From: cv.from,
 				Reason: "target_info carries the resource attributes that aren't promoted to labels",
 			})
 			continue
@@ -224,11 +230,11 @@ func (n *Node) dataEvents(id lineage.SignalID, cv *converted) []lineage.Event {
 	if cv.lset.Has("instance") {
 		detail["instance_from"] = "service.instance.id"
 	}
-	events := []lineage.Event{{Node: Name, Signal: id, Action: lineage.Derived, From: cv.from, Detail: detail}}
+	events := []lineage.Event{{Node: n.name, Signal: id, Action: lineage.Derived, From: cv.from, Detail: detail}}
 	for _, a := range n.promote {
 		if _, ok := res.Get(a); !ok {
 			events = append(events, lineage.Event{
-				Node: Name, Signal: id, Attribute: a, Action: lineage.Skipped,
+				Node: n.name, Signal: id, Attribute: a, Action: lineage.Skipped,
 				Reason: "listed in promote_otel_resource_attributes, but absent on the input resource",
 			})
 		}
