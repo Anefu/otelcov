@@ -14,4 +14,16 @@ import (
 	_ "k8s.io/api/core/v1"
 	_ "k8s.io/apimachinery/pkg/apis/meta/v1"
 	_ "sigs.k8s.io/yaml"
+
+	_ "github.com/prometheus/alertmanager/config"
+	_ "github.com/prometheus/alertmanager/dispatch"
+	_ "github.com/prometheus/common/model"
+	_ "github.com/prometheus/prometheus/model/labels"
+	_ "github.com/prometheus/prometheus/model/rulefmt"
+	_ "github.com/prometheus/prometheus/prompb"
+	_ "github.com/prometheus/prometheus/promql"
+	_ "github.com/prometheus/prometheus/promql/parser"
+	_ "github.com/prometheus/prometheus/storage"
+	_ "github.com/prometheus/prometheus/storage/remote/otlptranslator/prometheusremotewrite"
+	_ "github.com/prometheus/prometheus/util/annotations"
 )
