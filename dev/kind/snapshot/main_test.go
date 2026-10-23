@@ -86,16 +86,22 @@ func requestLine(t *testing.T, s sender, at time.Time, detected bool) string {
 // pods as kubectl prints them from a newer cluster: status.observedGeneration
 // isn't in the 1.32 API types.
 func podsYAML() string {
+	// Pods are named <deployment>-<pod-template-hash>-<suffix>, owned by the
+	// ReplicaSet <deployment>-<pod-template-hash>, as Kubernetes makes them.
 	pod := func(name, node, ip, containers, env string) string {
+		parts := strings.Split(name, "-")
+		rs := strings.Join(parts[:len(parts)-1], "-")
+		hash := parts[len(parts)-2]
+		instance := strings.Join(parts[:len(parts)-2], "-")
 		return fmt.Sprintf(`  - apiVersion: v1
     kind: Pod
     metadata:
       name: %s
       namespace: inference
-      uid: uid-%s
-      labels: {app.kubernetes.io/name: vllm, pod-template-hash: abc}
+      uid: uid-%[1]s
+      labels: {app.kubernetes.io/name: vllm, app.kubernetes.io/instance: %[2]s, pod-template-hash: %[3]s}
       ownerReferences:
-        - {apiVersion: apps/v1, kind: ReplicaSet, name: %s-rs, uid: rs-%s, controller: true}
+        - {apiVersion: apps/v1, kind: ReplicaSet, name: %[4]s, uid: rs-%[4]s, controller: true}
     spec:
       nodeName: %s
       containers:
@@ -105,7 +111,7 @@ func podsYAML() string {
       podIP: %s
       podIPs: [{ip: %s}]
       observedGeneration: 1
-`, name, name, name, name, node, strings.ReplaceAll(containers, "ENV", env), ip, ip)
+`, name, instance, hash, rs, node, strings.ReplaceAll(containers, "ENV", env), ip, ip)
 	}
 	vllm := "        - name: vllm\n          image: otelcov-demo\n          env:\n            - {name: OTEL_SERVICE_NAME, value: vllm}\nENV"
 	return "apiVersion: v1\nkind: List\nmetadata: {resourceVersion: \"\"}\nitems:\n" +
@@ -167,7 +173,7 @@ func TestKindSetup(t *testing.T) {
 	err = run(options{
 		dir: dir, agentConfig: filepath.Join(kind, "config/agent.yaml"),
 		collector: "agent", processor: "resourcedetection", capture: "resourcedetection/capture",
-		templates: filepath.Join(kind, "otelcov/scenarios"),
+		templates: filepath.Join(kind, "otelcov/scenarios"), appsWhatIfs: filepath.Join(kind, "whatif/apps-*.yaml"),
 	}, start.Add(10*time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -185,12 +191,16 @@ func TestKindSetup(t *testing.T) {
 		t.Error("attributes the tap already has aren't detected values")
 	}
 
-	want := map[string]string{
-		"01-baseline.yaml":      report.Covered,
-		"02-team-pr.yaml":       report.NotCovered,
-		"03-agent-badport.yaml": report.Unverified,
+	// Status per scenario and pod (vllm-chat, vllm-embed).
+	want := map[string][2]string{
+		"01-baseline.yaml":      {report.Covered, report.Covered},
+		"02-team-pr.yaml":       {report.NotCovered, report.NotCovered},
+		"03-agent-badport.yaml": {report.Unverified, report.Unverified},
+		// The motivating bug: without its env var, vllm-embed's container
+		// can't be named (it has a sidecar). vllm-chat is unaffected.
+		"04-embed-no-env.yaml": {report.Covered, report.NotCovered},
 	}
-	for name, status := range want {
+	for name, statuses := range want {
 		t.Run(name, func(t *testing.T) {
 			s, err := scenario.Load(filepath.Join(dir, "scenarios", name), dir)
 			if err != nil {
@@ -208,8 +218,18 @@ func TestKindSetup(t *testing.T) {
 				t.Fatalf("want both pods, got %+v", rep.Summary)
 			}
 			for _, e := range rep.Summary {
+				status := statuses[0]
+				if strings.Contains(e.Pod, "vllm-embed") {
+					status = statuses[1]
+				}
 				if e.Status != status {
 					t.Errorf("%s: %s, want %s (broken at %s, unverified by %v)", e.Pod, e.Status, status, e.BrokenAt, e.UnverifiedBy)
+				}
+			}
+			if name == "04-embed-no-env.yaml" {
+				if len(rep.Diagnosis) != 1 || rep.Diagnosis[0].MissingLabel != "k8s_container_name" ||
+					!strings.Contains(rep.Diagnosis[0].Explanation, "k8sattributes") || !strings.Contains(rep.Diagnosis[0].Explanation, "2 containers") {
+					t.Errorf("want the k8sattributes diagnosis for vllm-embed: %+v", rep.Diagnosis)
 				}
 			}
 			var podsWarning bool

@@ -55,6 +55,7 @@ func TestCompare(t *testing.T) {
 			b, err := os.ReadFile(filepath.Join(fixtures, "collector", cm.key))
 			return string(b), err
 		},
+		podExists: func(context.Context, string, string) (bool, error) { return true, nil },
 	}
 	var out bytes.Buffer
 	disagree, err := run(context.Background(), o, []string{
@@ -91,7 +92,10 @@ func TestVerdict(t *testing.T) {
 		{report.CoveredSimulated, truth{receivers: []string{"pager"}}, "agree"},
 		{report.Covered, truth{receivers: []string{"default"}}, "DISAGREE: routed elsewhere"},
 		{report.Covered, truth{ruler: "pending"}, "wait"},
-		{report.Covered, truth{}, "DISAGREE: no alert"},
+		{report.Covered, truth{metrics: []string{"m"}}, "DISAGREE: no alert"},
+		{report.Covered, truth{}, "DISAGREE: no series in Mimir"},
+		{report.NotCovered, truth{gone: true}, "n/a: the pod was replaced"},
+		{report.Covered, truth{gone: true}, "n/a: the pod was replaced"},
 		{report.NotCovered, truth{}, "agree"},
 		{report.NotCovered, truth{ruler: "firing"}, "DISAGREE: the alert exists"},
 		{report.Unverified, truth{}, "n/a"},

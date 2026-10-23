@@ -9,6 +9,7 @@
 # Deploy a what-if for real, and back:
 #   tilt args -- --gateway=whatif/gateway-team-pr.yaml
 #   tilt args -- --agent=whatif/agent-badport.yaml
+#   tilt args -- --apps=whatif/apps-embed-no-env.yaml
 #   tilt args --clear
 
 CONTEXT = 'kind-otelcov'
@@ -18,9 +19,11 @@ if k8s_context() != CONTEXT:
 
 config.define_string('agent', usage='agent collector config to deploy, relative to dev/kind (default config/agent.yaml)')
 config.define_string('gateway', usage='gateway collector config to deploy, relative to dev/kind (default config/gateway.yaml)')
+config.define_string('apps', usage='apps manifest to deploy, relative to dev/kind (default k8s/apps.yaml)')
 cfg = config.parse()
 AGENT_CONFIG = cfg.get('agent', 'config/agent.yaml')
 GATEWAY_CONFIG = cfg.get('gateway', 'config/gateway.yaml')
+APPS_MANIFEST = cfg.get('apps', 'k8s/apps.yaml')
 
 # --- Configs ---------------------------------------------------------------
 # ConfigMaps are made here from the files, so editing a file (or switching a
@@ -56,8 +59,8 @@ restart_on = {
 }
 
 objects = []
-for f in ['namespaces', 'agent', 'gateway', 'mimir', 'alertmanager', 'apps']:
-    objects.extend(read_yaml_stream('k8s/%s.yaml' % f))
+for f in ['k8s/namespaces.yaml', 'k8s/agent.yaml', 'k8s/gateway.yaml', 'k8s/mimir.yaml', 'k8s/alertmanager.yaml', APPS_MANIFEST]:
+    objects.extend(read_yaml_stream(f))
 
 for o in objects:
     names = restart_on.get(o['metadata']['name'])

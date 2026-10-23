@@ -1,0 +1,16 @@
+# Template: capture.sh writes this to captured/scenarios/ with eval_time set to
+# the recording's last timestamp. Paths are relative to captured/scenarios/.
+# What-if: the motivating bug (whatif/apps-embed-no-env.yaml). The pods under
+# test are the captured pods with that file's Deployment templates applied.
+name: 04-embed-no-env
+eval_time: ${EVAL_TIME}
+
+data:
+  recording: ../recording.otlp.jsonl
+  snapshot: ../snapshot.meta.yaml
+
+config:
+  pods: ../pods-embed-no-env.yaml
+  topology: ../../otelcov/topology.yaml
+
+requirements: ../../otelcov/requirements.yaml
