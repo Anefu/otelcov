@@ -202,6 +202,8 @@ Other deployment patterns and backends come later, as adapters.
 | 31 | License: Apache-2.0 | MIT; AGPL-3.0 | Matches the collector, Prometheus and Alertmanager; CNCF default; explicit patent grant |
 | 32 | LogQL parser built with a parser generator (goyacc) | Hand-written recursive descent | Declarative grammar, easy to compare with the LogQL docs; can switch later |
 | 33 | LogQL conformance: tests from the docs and our own queries, plus comparison against a real Loki in CI | Either alone | Catches differences nobody thought to test |
+| 34 | Development builds run in Claude's cloud workspace; whatever can't build there runs in GitHub Actions | Owner's Mac; widening the workspace's network allowlist | No setup for the owner |
+| 35 | Signals are collector `pdata` throughout (`pmetric`, `plog`, `ptrace`), including after the backend node | Own types; hybrid (pdata until the backend, own types after) | Real processors run without conversion; tying otelcov to collector versions fits decision 19's version pinning |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
@@ -241,6 +243,7 @@ Treat these as open; ask before building on them.
 - **ServiceMonitor relabelings** are already applied by the time data reaches the tap, so a snapshot can't test a PR that changes them. With the OTel Operator's Target Allocator, its API lists every scrape target; relabeling can run on Prometheus's own relabel package.
 - **Changes left of the tap** (SDK env vars, app instrumentation) are baked into recordings; only sdk-env can simulate them.
 - **Real processors don't explain non-events**; that's why k8sattributes is custom.
+- **Build environment**: Claude's cloud workspace has Go 1.24 and can fetch modules hosted on GitHub via `GOPROXY=direct`, but not `proxy.golang.org`, `sum.golang.org`, the Go toolchain downloads, or custom import paths (`golang.org/x`, `go.opentelemetry.io`, `google.golang.org`, `gopkg.in`, `k8s.io`). `pdata` v1.69.0 needs Go 1.26 and several of those paths.
 - **promtool unit tests** compare alert annotations exactly; keep test annotations deterministic.
 
 ## Prior art
