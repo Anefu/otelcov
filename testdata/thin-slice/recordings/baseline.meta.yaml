@@ -1,0 +1,5 @@
+# Snapshot metadata: what was running when baseline.otlp.jsonl was captured.
+# The sdk-env node needs these pod specs to undo the env vars that were active
+# at recording time before applying the ones from the config under test.
+recorded_at: 2026-10-23T10:00:00Z
+pods: ../k8s/pods-single.yaml

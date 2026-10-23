@@ -1,0 +1,16 @@
+route:
+  receiver: platform-default
+  group_by: [alertname, k8s_namespace_name]
+  routes:
+    - receiver: inference-pager
+      matchers:
+        - team="inference"
+        - severity="page"
+
+receivers:
+  - name: platform-default
+    webhook_configs:
+      - url: http://alert-sink.example.com/platform-default
+  - name: inference-pager
+    webhook_configs:
+      - url: http://alert-sink.example.com/inference-pager
