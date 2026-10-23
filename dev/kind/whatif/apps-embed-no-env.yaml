@@ -1,0 +1,74 @@
+# What-if: the motivating bug. A PR drops OTEL_RESOURCE_ATTRIBUTES from
+# vllm-embed, so its SDK no longer names its container. The pod has a sidecar,
+# so k8sattributes can't tell which container sent the data, k8s_container_name
+# is missing, and the rule's k8s_container_name="vllm" matcher drops the pod.
+#
+# Predict it: capture applies this file's Deployment templates to the captured
+# pods (pods-embed-no-env.yaml) and otelcov runs 04-embed-no-env.
+# Deploy it:  tilt args -- --apps=whatif/apps-embed-no-env.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-chat
+  namespace: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm
+      app.kubernetes.io/instance: vllm-chat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm
+        app.kubernetes.io/instance: vllm-chat
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: otelcov-worker
+      containers:
+        - name: vllm
+          image: otelcov-demo
+          env:
+            - {name: OTEL_SERVICE_NAME, value: vllm}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-agent.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "true"}
+            - {name: OTEL_METRIC_EXPORT_INTERVAL, value: "15000"}
+            - {name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE, value: delta}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-embed
+  namespace: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm
+      app.kubernetes.io/instance: vllm-embed
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm
+        app.kubernetes.io/instance: vllm-embed
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: otelcov-worker2
+      containers:
+        - name: vllm
+          image: otelcov-demo
+          env:
+            - {name: OTEL_SERVICE_NAME, value: vllm}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-agent.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "true"}
+            - {name: OTEL_METRIC_EXPORT_INTERVAL, value: "15000"}
+            - {name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE, value: delta}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+        - name: log-shipper
+          image: busybox:1.37
+          command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]
+          resources:
+            requests: {cpu: 5m, memory: 8Mi}

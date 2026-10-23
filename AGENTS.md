@@ -39,7 +39,12 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 - `testdata/thin-slice/`: the first end-to-end slice, one collector (4 scenarios). See its README.
 - `testdata/agent-gateway/`: daemonset agents + gateway, the owner's topology (3 scenarios). See its README.
-- `dev/kind/`: a kind cluster running the owner's topology for real (Tilt), with capture, otelcov and a ground-truth comparison against Mimir and Alertmanager. See its README. Its configs pass the real validators. Its backend half was rehearsed locally with the real binaries (Mimir 3.2.3, Alertmanager 0.28.1, collector 0.135): otelcov's predicted series labels matched Mimir's exactly. The cluster itself hasn't run yet.
+- `dev/kind/`: a kind cluster running the owner's topology for real (Tilt), with capture, otelcov and a ground-truth comparison against Mimir and Alertmanager. See its README.
+- **First real run** (2026-10-23, kind on colima, Kubernetes 1.37): otelcov's answers on a real recording matched the real stack.
+  - Baseline: both pods covered, and compare agreed.
+  - Gateway team-condition PR, predicted from the old recording and then deployed: both pods not covered. The real stack broke at the same place: series reach Mimir, but the rule output disappears. compare agreed.
+  - Apps reached their node's agent with their own pod IP, and the resourcedetection capture gave real per-node values.
+  - Earlier, in a local rehearsal with the real binaries, otelcov's predicted series labels matched Mimir 3.2.3's exactly, `target_info` included.
 - The `testdata/` fixtures have **not** yet been run through the real tools (promtool, amtool, otelcol validate).
 
 ## Scope of the first release
@@ -321,6 +326,8 @@ Chosen while building the kind lab (decision 48):
 - **Capture**: the snapshot's `eval_time` is the recording's last data point timestamp (rounded up to the second). A cut-off last line in a tap file is skipped. Each capture replaces the previous one.
 - **compare's verdicts**: covered agrees only if the alert is routed to the required receiver; not_covered agrees if there's no alert in the ruler or Alertmanager; unverified is `n/a`. Only scenarios whose collector configs equal the deployed ConfigMaps are compared.
 - **kind-only settings**: the alert threshold is `> 0` with `for: 1m`, the rule interval is 30s, and Alertmanager waits are short, so the real stack answers within minutes.
+- **Apps what-ifs in the lab** (`dev/kind/snapshot/whatif.go`): a manifest's Deployment templates are applied to the captured pods they own (ReplicaSet `<deployment>-<pod-template-hash>`). Only container env/envFrom and pod labels change; a template with a different set of containers is refused. This is a first, lab-only answer to the open question on PR what-ifs for Deployment templates.
+- **compare and replaced pods**: a pod that no longer exists gives `n/a` (capture again). A pod that exists but has no series in Mimir is a disagreement when otelcov said covered.
 - **Report schema details**: signal ID prefixes (`s`, `p`, `r`, `a`), field names, the `covered_simulated` status.
 - **Repository layout**: fixtures in `testdata/` (Go convention).
 

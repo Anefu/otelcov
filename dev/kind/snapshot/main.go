@@ -12,6 +12,8 @@
 //	recording.otlp.jsonl   every agent's tap, node by node
 //	snapshot.meta.yaml     recorded_at, pods, and what resourcedetection detected per node
 //	scenarios/*.yaml       the -templates scenarios, with eval_time set to the last recorded timestamp
+//	pods-<name>.yaml       for each -apps-whatifs manifest apps-<name>.yaml, the pods as its
+//	                       Deployment templates would make them (see whatif.go)
 //
 // Detected values are the attributes metrics/detected has and metrics/tap
 // doesn't (or has with another value), matched by the sender's k8s.pod.ip.
@@ -50,6 +52,7 @@ func main() {
 	flag.StringVar(&o.processor, "processor", "resourcedetection", "the agent's resourcedetection processor")
 	flag.StringVar(&o.capture, "capture-processor", "resourcedetection/capture", "the processor metrics/detected runs")
 	flag.StringVar(&o.templates, "templates", "", "directory of scenario templates (eval_time: ${EVAL_TIME})")
+	flag.StringVar(&o.appsWhatIfs, "apps-whatifs", "", "glob of apps what-if manifests (apps-<name>.yaml)")
 	flag.Parse()
 	if o.agentConfig == "" {
 		fmt.Fprintln(os.Stderr, "usage: snapshot -dir captured -agent-config agent.yaml [-templates dir]")
@@ -62,7 +65,7 @@ func main() {
 }
 
 type options struct {
-	dir, agentConfig, collector, processor, capture, templates string
+	dir, agentConfig, collector, processor, capture, templates, appsWhatIfs string
 }
 
 func run(o options, now time.Time) error {
@@ -124,6 +127,11 @@ func run(o options, now time.Time) error {
 	}
 	if err := os.WriteFile(filepath.Join(o.dir, "snapshot.meta.yaml"), b, 0o644); err != nil {
 		return err
+	}
+	if o.appsWhatIfs != "" {
+		if err := writeAppsWhatIfs(o.dir, o.appsWhatIfs); err != nil {
+			return err
+		}
 	}
 
 	// The lookback window ends at eval_time inclusive; round up so the last

@@ -68,13 +68,18 @@ func main() {
 
 type options struct {
 	mimir, alertmanager, context, podLabel, namespaceLabel string
-	// configMapData reads a deployed config; tests replace it.
+	// configMapData reads a deployed config, and podExists checks a pod is
+	// still there; tests replace them.
 	configMapData func(ctx context.Context, cm configMap) (string, error)
+	podExists     func(ctx context.Context, namespace, name string) (bool, error)
 }
 
 func run(ctx context.Context, o options, paths []string, w io.Writer) (bool, error) {
 	if o.configMapData == nil {
 		o.configMapData = o.kubectlConfigMap
+	}
+	if o.podExists == nil {
+		o.podExists = o.kubectlPodExists
 	}
 	disagree, compared := false, 0
 	for _, path := range paths {
@@ -138,8 +143,18 @@ func (o options) kubectlConfigMap(ctx context.Context, cm configMap) (string, er
 	return string(out), nil
 }
 
+func (o options) kubectlPodExists(ctx context.Context, namespace, name string) (bool, error) {
+	out, err := exec.CommandContext(ctx, "kubectl", "--context", o.context, "-n", namespace,
+		"get", "pod", name, "--ignore-not-found", "-o", "name").Output()
+	if err != nil {
+		return false, fmt.Errorf("looking up pod %s/%s: %w", namespace, name, err)
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
 // truth is what the real stack did with one pod's signal.
 type truth struct {
+	gone      bool     // the pod no longer exists (redeployed since the capture)
 	metrics   []string // series names in Mimir for the pod
 	ruler     string   // "", "pending" or "firing"
 	receivers []string // where Alertmanager routed the alert
@@ -182,6 +197,9 @@ func compare(ctx context.Context, o options, s *scenario.Scenario, w io.Writer) 
 }
 
 func (t truth) String() string {
+	if t.gone {
+		return "pod no longer exists"
+	}
 	var parts []string
 	if len(t.metrics) == 0 {
 		parts = append(parts, "no series in Mimir")
@@ -206,6 +224,9 @@ func verdict(status string, t truth, receiver string) string {
 		routed = routed || r == receiver
 	}
 	alerting := t.ruler != "" || len(t.receivers) > 0
+	if t.gone {
+		return "n/a: the pod was replaced since the capture; capture again"
+	}
 	switch status {
 	case report.Covered, report.CoveredSimulated:
 		switch {
@@ -215,8 +236,10 @@ func verdict(status string, t truth, receiver string) string {
 			return "DISAGREE: routed elsewhere"
 		case t.ruler != "":
 			return "wait: not routed yet (for: 1m, group_wait 10s)"
+		case len(t.metrics) == 0:
+			return "DISAGREE: no series in Mimir (or the data is older than 5m)"
 		default:
-			return "DISAGREE: no alert (or the data is older than 5m)"
+			return "DISAGREE: no alert"
 		}
 	case report.NotCovered:
 		if alerting {
@@ -230,6 +253,14 @@ func verdict(status string, t truth, receiver string) string {
 
 func (o options) lookup(ctx context.Context, namespace, pod, alert string) (truth, error) {
 	var t truth
+	exists, err := o.podExists(ctx, namespace, pod)
+	if err != nil {
+		return t, err
+	}
+	if !exists {
+		t.gone = true
+		return t, nil
+	}
 	sel := fmt.Sprintf(`%s=%q,%s=%q`, o.namespaceLabel, namespace, o.podLabel, pod)
 
 	res, err := o.query(ctx, fmt.Sprintf(`count by (__name__) ({%s})`, sel))

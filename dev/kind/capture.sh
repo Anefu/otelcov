@@ -5,6 +5,7 @@
 #   pods.yaml, agent.yaml                      the pods and the agent config that ran
 #   recording.otlp.jsonl, snapshot.meta.yaml   what otelcov replays
 #   scenarios/*.yaml                           otelcov/scenarios with eval_time set
+#   pods-<name>.yaml                           the pods as each whatif/apps-<name>.yaml would make them
 # Each run replaces the previous capture.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -34,5 +35,5 @@ done <<< "$agents"
 k -n inference get pods -o yaml > "$out/pods.yaml"
 k -n observability get configmap otel-agent-config -o jsonpath='{.data.agent\.yaml}' > "$out/agent.yaml"
 
-bin/snapshot -dir "$out" -agent-config "$out/agent.yaml" -templates otelcov/scenarios
+bin/snapshot -dir "$out" -agent-config "$out/agent.yaml" -templates otelcov/scenarios -apps-whatifs 'whatif/apps-*.yaml'
 echo "Captured into dev/kind/$out. Run the otelcov resource next."
