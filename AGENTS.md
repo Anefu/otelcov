@@ -35,7 +35,7 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 ## Status
 
-Design phase. Go module and dependency vendoring are set up; no checker code yet. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
+Early implementation. Built and tested against the thin-slice golden reports: the replay source, sdk-env and k8sattributes nodes (plus batch as a pass-through). Backend, rules, alerts, routing and report building are next. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
 
 - `testdata/thin-slice/`: hand-written fixtures for the first end-to-end slice (4 scenarios, golden reports). See its README.
 - `scripts/check_fixtures.py`: stopgap consistency check for the fixtures; delete once Go tests exist.
@@ -160,10 +160,24 @@ Other deployment patterns and backends come later, as adapters.
 - Not yet supported: **series** units (need stepped time; e.g. deltatocumulative running totals), **trace** units (tail sampling; span IDs would give exact matching), **batch** units (groupbyattrs, dedup). Processors needing them give `unverified`.
 - Owner's processors: batch (pass-through), attributes, resource, filter, transform, metricstransform, deltatocumulative (item at a single instant), resourcedetection (custom node, source of values undecided), k8sattributes (custom node).
 
+### Nodes built so far
+
+- **`source/otlp-replay`** (`internal/nodes/source`): one item per data point, IDs `s1, s2, ...` in file order, origin `<file>#L<line>`.
+- **`source/sdk-env`** (`internal/nodes/sdkenv`): as specified under Nodes. Also handles `OTEL_SERVICE_NAME` (it wins over `service.name` in `OTEL_RESOURCE_ATTRIBUTES`). Attribution compares the recorded `service.name` with each container's SDK service name. Malformed `OTEL_RESOURCE_ATTRIBUTES` gives `unverified`, since SDKs disagree on handling it.
+- **`collector/k8sattributes`** (`internal/nodes/k8sattributes`): pod association (resource attributes `k8s.pod.ip`, `k8s.pod.uid`, `container.id`, name + namespace; `connection` can't match in a replay); never overwrites existing attributes; container attributes need `k8s.container.name`, `container.id` or a single-container pod. Extracts namespace, pod name/uid, node, owner names (ReplicaSet, Deployment via `pod-template-hash`, StatefulSet, DaemonSet, Job), container name/id. Other attributes give `unverified`. Defaults for `extract.metadata` and `pod_association` follow the docs. **Unmodeled settings (e.g. `filter`, `extract.labels`) make the whole node `Unsupported`**, rather than being ignored.
+- **batch**: pass-through. Any other processor type: `Unsupported` (data passes through, every item `unverified`).
+- Scenario runs: `internal/scenario.Run` wires replay → sdk-env → the collector pipeline's processors.
+- **Golden tests** (`internal/scenario/golden_test.go`) compare only nodes listed in `implemented`, in order, ignoring event IDs. Add a node there when it's built.
+
+### Snapshot metadata
+
+- Today: `recorded_at` and `pods` (pod specs at recording time).
+- Planned (decision 40): each collector instance's resourcedetection output.
+
 ### Lineage and reports
 
 - **Structured events**: `{id, node, signal, attribute?, action, value?, simulated?, reason?, detail?}`.
-- Actions: `attributed`, `associated`, `set`, `kept`, `skipped`, `derived`, `dropped`, `routed`.
+- Actions: `attributed`, `associated`, `set`, `kept`, `removed`, `skipped`, `derived`, `dropped`, `routed`, `unverified` (the node can't tell what really happens; reason says why).
 - **Record non-events** (`skipped`): in the motivating bug, the root cause is something that *didn't* happen.
 - Report sections: `summary` (per requirement and pod: status, path, receiver or `broken_at`), `diagnosis` (event chain from the break back to the root cause, plus hints), `signals`, `events`.
 - Statuses: `covered`, `covered_simulated` (path needs an attribute only sdk-env provided; listed in `simulated_by`), `not_covered`, `unverified`.
@@ -216,6 +230,9 @@ Other deployment patterns and backends come later, as adapters.
 | 37 | Pin collector **0.135** (`pdata` v1.41.0, Go 1.24) — *owner to confirm 0.134 vs 0.135* | Latest collector (needs Go 1.26) | Match the deployed collectors' behavior |
 | 38 | Lineage across real processors: run them per item, with IDs and parents kept in an envelope outside `pdata` (Writer-monad style: each node returns outputs plus events) | Hidden ID attribute on each item; matching outputs to inputs by content | Exact matching, and processors can't strip or react to the metadata |
 | 39 | Processing units: **item** and **metric** (all data points of one metric in one resource and scope). Adapters choose the unit from their config; an output in a metric group that matches no single input gets the whole group as parents | `unverified` for anything needing more than one item; `unverified` now, units later | Covers metricstransform aggregations and cross-point transform/filter statements in the owner's configs |
+| 40 | resourcedetection values come from snapshot metadata: each collector instance's detected attributes are captured at recording time | Read them from Mimir; "present, value unknown" | Real values; a detector added by a PR gives `unverified` until a new snapshot exists |
+| 41 | Kubernetes objects use the real API types (`k8s.io/api`, `apimachinery`, same versions as collector-contrib 0.135) | Own minimal structs | Exact semantics; nodes, ConfigMaps and Deployments will be needed |
+| 42 | Code layout: `internal/{lineage,unit,graph,kube,otelenv,collector,scenario,nodes/...}`, one package per node; nodes are built with their config and take data in `ProcessMetrics` | — | Mirrors the collector (typed pipelines, config at construction) |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
@@ -241,7 +258,6 @@ Treat these as open; ask before building on them.
 
 - **PR what-ifs on Deployment templates**: fixtures keep pod names and IPs stable. A real PR changes a template, so the checker must map recorded pods to their owner and apply the new template.
 - **LogQL evaluation**: when and how to evaluate line filters and parsers (`|= "error"`, `| json`); until then they're `unverified`.
-- **resourcedetection values**: recordings are taken before the processors, so detected attributes (`k8s.cluster.name`, `cloud.region`, `host.name`) aren't in them. Where the custom node gets them from is undecided.
 - **Snapshot metadata contents**: pod specs today; which other configs (collector config SHAs, ServiceMonitors) to store.
 - **Version pinning mechanism** for collector-contrib (builder manifest field, check against deployed version?).
 - **Repository conventions**: Go module path, CI setup, contribution guidelines.
@@ -314,9 +330,18 @@ otelcol-contrib validate --config=collector/collector.yaml
 AGENTS.md                 this file
 README.md                 human-facing overview
 LICENSE                   Apache-2.0
-scripts/check_fixtures.py stopgap fixture checker (delete once Go tests exist)
+scripts/check_fixtures.py stopgap fixture checker (delete once Go tests cover every node)
 go.mod, go.sum            module github.com/Anefu/otelcov
 internal/deps/tools.go    packages pinned for vendoring (build tag `tools`)
+internal/lineage          signal IDs, events, the run's log
+internal/unit             items and metric groups: splitting and merging pdata
+internal/graph            node interfaces, runner, PassThrough, Unsupported
+internal/kube             loading pods, env var resolution (downward API, $(VAR))
+internal/otelenv          SDK resource from OTEL_RESOURCE_ATTRIBUTES / OTEL_SERVICE_NAME
+internal/collector        minimal collector config reader
+internal/scenario         scenario loading, runs, golden tests
+internal/nodes/...        one package per node; nodetest has test helpers
+.github/workflows/ci.yml      gofmt, tidy, vet, tests, fixture check
 .github/workflows/vendor.yml  vendors dependencies onto deps/<branch>
 testdata/thin-slice/      fixtures for the first slice; see its README
 ```
