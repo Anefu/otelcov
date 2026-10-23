@@ -19,6 +19,8 @@ import (
 	"github.com/Anefu/otelcov/internal/nodes/rules"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
+	"github.com/Anefu/otelcov/internal/report"
+	"github.com/Anefu/otelcov/internal/requirements"
 	"github.com/Anefu/otelcov/internal/rulefile"
 	"github.com/Anefu/otelcov/internal/unit"
 )
@@ -34,6 +36,8 @@ type Result struct {
 	Items []unit.Metric
 	// Alerts are the alerts the alerting rules could produce.
 	Alerts []alerting.Alert
+
+	pods []corev1.Pod
 }
 
 // Run executes the scenario's graph as far as it is implemented: replay,
@@ -112,7 +116,20 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	if err := graph.Record(log, route.Name, router.Process(ao.Alerts), nil, nil); err != nil {
 		return nil, err
 	}
-	return &Result{Log: log, Items: items, Alerts: ao.Alerts}, nil
+	return &Result{Log: log, Items: items, Alerts: ao.Alerts, pods: pods}, nil
+}
+
+// Report runs the scenario and answers its requirements.
+func Report(ctx context.Context, s *Scenario) (*report.Report, error) {
+	res, err := Run(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	reqs, err := requirements.Load(s.Requirements)
+	if err != nil {
+		return nil, fmt.Errorf("requirements: %w", err)
+	}
+	return report.Build(s.Name, s.EvalTime, res.Log, reqs, res.pods), nil
 }
 
 // processorNode builds the node for one collector processor. Types and

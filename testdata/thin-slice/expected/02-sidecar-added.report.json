@@ -36,7 +36,7 @@
         "e14"
       ],
       "root_cause": "e14",
-      "explanation": "VLLMMemoryHigh only sees series with k8s_container_name=\"vllm\". The vllm-embed series has no container label, because k8sattributes can't tell which of the pod's 2 containers sent it.",
+      "explanation": "rule inference:vllm_memory_bytes:max only selects series matching k8s_container_name=\"vllm\", and this pod's series has no k8s_container_name label, so it never reaches VLLMMemoryHigh. k8s_container_name comes from resource attribute k8s.container.name, which collector/k8sattributes didn't set: pod has 2 containers (vllm, log-shipper) and the resource has neither container.id nor k8s.container.name, so the container can't be identified.",
       "hints": [
         "Set k8s.container.name=vllm in OTEL_RESOURCE_ATTRIBUTES on the vllm container.",
         "Or have the SDK send container.id, so k8sattributes can match the container."
