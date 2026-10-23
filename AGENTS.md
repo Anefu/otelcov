@@ -35,7 +35,7 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 ## Status
 
-Design phase. No Go code yet. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
+Design phase. Go module and dependency vendoring are set up; no checker code yet. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
 
 - `testdata/thin-slice/`: hand-written fixtures for the first end-to-end slice (4 scenarios, golden reports). See its README.
 - `scripts/check_fixtures.py`: stopgap consistency check for the fixtures; delete once Go tests exist.
@@ -204,6 +204,8 @@ Other deployment patterns and backends come later, as adapters.
 | 33 | LogQL conformance: tests from the docs and our own queries, plus comparison against a real Loki in CI | Either alone | Catches differences nobody thought to test |
 | 34 | Development builds run in Claude's cloud workspace; whatever can't build there runs in GitHub Actions | Owner's Mac; widening the workspace's network allowlist | No setup for the owner |
 | 35 | Signals are collector `pdata` throughout (`pmetric`, `plog`, `ptrace`), including after the backend node | Own types; hybrid (pdata until the backend, own types after) | Real processors run without conversion; tying otelcov to collector versions fits decision 19's version pinning |
+| 36 | Dependencies are vendored by CI onto `deps/<branch>` branches | CI compiles everything; build Go/modules from GitHub mirrors; widen the network allowlist | Fast offline builds in the dev workspace; downloads stay checksum-verified against sum.golang.org |
+| 37 | Pin collector **0.135** (`pdata` v1.41.0, Go 1.24) — *owner to confirm 0.134 vs 0.135* | Latest collector (needs Go 1.26) | Match the deployed collectors' behavior |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
@@ -244,6 +246,9 @@ Treat these as open; ask before building on them.
 - **Changes left of the tap** (SDK env vars, app instrumentation) are baked into recordings; only sdk-env can simulate them.
 - **Real processors don't explain non-events**; that's why k8sattributes is custom.
 - **Build environment**: Claude's cloud workspace has Go 1.24 and can fetch modules hosted on GitHub via `GOPROXY=direct`, but not `proxy.golang.org`, `sum.golang.org`, the Go toolchain downloads, or custom import paths (`golang.org/x`, `go.opentelemetry.io`, `google.golang.org`, `gopkg.in`, `k8s.io`). `pdata` v1.69.0 needs Go 1.26 and several of those paths.
+- **Collector compatibility**: `pdata` (v1) follows Go's compatibility promise and OTLP is wire-stable, but most collector-contrib modules are v0 and component *output* can change between versions (alpha/beta components, feature gates flipping). Hence the version pin.
+- **Feature gates are config.** Collectors run with `--feature-gates`; nodes must apply the same gate settings, or processors behave differently. Not yet handled.
+- **One binary links one version of each module.** If agent and gateway run different collector-contrib versions, one otelcov build can only match one of them.
 - **promtool unit tests** compare alert annotations exactly; keep test annotations deterministic.
 
 ## Prior art
@@ -262,6 +267,21 @@ Treat these as open; ask before building on them.
 | pint, promtool | Rule linting and unit tests | Pipelines, per-workload coverage |
 
 ## Commands
+
+### Building offline (dev workspace)
+
+`vendor/` is never committed to source branches. The `vendor` workflow runs on every push that touches Go files or `go.mod`, and publishes `go.mod`, `go.sum` and `vendor/` on `deps/<branch>`.
+
+```sh
+git fetch origin '+refs/heads/deps/main:refs/remotes/origin/deps/main'
+git checkout origin/deps/main -- go.mod go.sum vendor && git reset -q go.mod go.sum vendor
+GOFLAGS=-mod=vendor go test ./...
+```
+
+- To use a new dependency: add it to `go.mod` and to `internal/deps/tools.go`, push, wait for the workflow, fetch again, then commit the `go.mod`/`go.sum` from the deps branch (they're verified by CI).
+- With normal network access (e.g. on a laptop or in CI), plain `go test ./...` works; vendoring isn't needed.
+
+### Fixtures
 
 ```sh
 # Fixture consistency (stopgap, until Go tests exist)
@@ -284,5 +304,8 @@ AGENTS.md                 this file
 README.md                 human-facing overview
 LICENSE                   Apache-2.0
 scripts/check_fixtures.py stopgap fixture checker (delete once Go tests exist)
+go.mod, go.sum            module github.com/Anefu/otelcov
+internal/deps/tools.go    packages pinned for vendoring (build tag `tools`)
+.github/workflows/vendor.yml  vendors dependencies onto deps/<branch>
 testdata/thin-slice/      fixtures for the first slice; see its README
 ```
