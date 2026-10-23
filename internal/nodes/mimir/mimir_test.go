@@ -67,3 +67,25 @@ func TestBackend(t *testing.T) {
 		t.Errorf("delta sum should be dropped: %+v", out.Events)
 	}
 }
+
+func TestSamplesOfOneSeriesAreKept(t *testing.T) {
+	n := New(Limits{})
+	a := item("s1", pmetric.AggregationTemporalityCumulative, "requests")
+	b := item("s2", pmetric.AggregationTemporalityCumulative, "requests")
+	// Same series, a minute later.
+	dp := unit.FirstMetric(b.Data).Sum().DataPoints().At(0)
+	dp.SetTimestamp(dp.Timestamp() + 60_000_000_000)
+	dp.SetDoubleValue(9)
+	out, err := n.ProcessMetrics(context.Background(), []unit.Metric{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range out.Items {
+		if unit.SeriesLabels(it.Data).Get("__name__") == "target_info" {
+			continue
+		}
+		if s := unit.SeriesSamples(it.Data); len(s) != 2 || s[1].V != 9 || len(it.From) != 2 {
+			t.Errorf("want one series with both samples and both parents, got %v from %v", s, it.From)
+		}
+	}
+}

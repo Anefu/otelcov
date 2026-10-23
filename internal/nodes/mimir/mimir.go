@@ -98,13 +98,23 @@ func (n *Node) Name() string { return Name }
 
 // converted is one output series before IDs are assigned.
 type converted struct {
-	lset   labels.Labels
-	ts     time.Time
-	value  float64
-	from   []lineage.SignalID
-	target bool // target_info
-	// for data series: the input it came from
+	lset    labels.Labels
+	samples []unit.Sample
+	from    []lineage.SignalID
+	target  bool // target_info
+	// for data series: the first input it came from
 	input unit.Metric
+}
+
+// add merges a sample, ignoring duplicates at the same timestamp (the backend
+// keeps the first).
+func (c *converted) add(s unit.Sample) {
+	for _, have := range c.samples {
+		if have.T.Equal(s.T) {
+			return
+		}
+	}
+	c.samples = append(c.samples, s)
 }
 
 func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Output, error) {
@@ -129,18 +139,24 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 		sort.Slice(series, func(i, j int) bool { return seriesKey(series[i]) < seriesKey(series[j]) })
 		for _, ts := range series {
 			key := seriesKey(ts)
-			if prev, dup := byKey[key]; dup {
-				// The same series from several inputs, such as target_info
-				// for items of one resource: one series, several parents.
-				prev.from = append(prev.from, it.ID)
+			cv, dup := byKey[key]
+			if dup {
+				// The same series from several inputs: later samples of one
+				// series, or target_info for items of one resource. One
+				// series, several parents.
+				if !containsID(cv.from, it.ID) {
+					cv.from = append(cv.from, it.ID)
+				}
+			} else {
+				cv = &converted{lset: toLabels(ts.Labels), from: []lineage.SignalID{it.ID}, input: it}
+				byKey[key] = cv
+			}
+			for _, smp := range ts.Samples {
+				cv.add(unit.Sample{T: time.UnixMilli(smp.Timestamp), V: smp.Value})
+			}
+			if dup {
 				continue
 			}
-			cv := &converted{lset: toLabels(ts.Labels), from: []lineage.SignalID{it.ID}, input: it}
-			if len(ts.Samples) > 0 {
-				s := ts.Samples[len(ts.Samples)-1]
-				cv.ts, cv.value = time.UnixMilli(s.Timestamp), s.Value
-			}
-			byKey[key] = cv
 			if cv.lset.Get(labels.MetricName) == "target_info" {
 				cv.target = true
 				targets = append(targets, cv)
@@ -155,9 +171,10 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 	for _, cv := range append(data, targets...) {
 		next++
 		id := lineage.SignalID("p" + strconv.Itoa(next))
-		out.Items = append(out.Items, unit.Metric{ID: id, From: cv.from, Data: unit.NewSeries(cv.lset, cv.ts, cv.value)})
+		data := unit.NewSeries(cv.lset, cv.samples...)
+		out.Items = append(out.Items, unit.Metric{ID: id, From: cv.from, Data: data})
 		out.Signals = append(out.Signals, lineage.Signal{
-			ID: id, Node: Name, Kind: "series", From: cv.from, Labels: cv.lset.Map(), Value: cv.value,
+			ID: id, Node: Name, Kind: "series", From: cv.from, Labels: cv.lset.Map(), Value: unit.LastValue(data),
 		})
 		if cv.target {
 			out.Events = append(out.Events, lineage.Event{
@@ -229,3 +246,12 @@ func toLabels(ls []prompb.Label) labels.Labels {
 }
 
 func seriesKey(ts prompb.TimeSeries) string { return toLabels(ts.Labels).String() }
+
+func containsID(ids []lineage.SignalID, id lineage.SignalID) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}

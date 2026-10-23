@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Anefu/otelcov/internal/nodes/mimir"
+	"github.com/Anefu/otelcov/internal/nodes/rules"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
 )
@@ -18,10 +20,14 @@ const fixtures = "../../testdata/thin-slice"
 // implemented lists the nodes whose lineage the golden tests compare. Add a
 // node here once it's built; the rest of each golden report is ignored until
 // then.
-var implemented = map[string]bool{
+var implementedNodes = map[string]bool{
 	sdkenv.Name:               true,
 	"collector/k8sattributes": true,
 	mimir.Name:                true,
+}
+
+func implemented(node string) bool {
+	return implementedNodes[node] || strings.HasPrefix(node, rules.Prefix)
 }
 
 type golden struct {
@@ -53,7 +59,7 @@ func TestGoldenReports(t *testing.T) {
 			// Source signals.
 			got := map[string]any{}
 			for _, sig := range res.Log.Signals() {
-				if sig.Node == source.Name || implemented[sig.Node] {
+				if sig.Node == source.Name || implemented(sig.Node) {
 					got[string(sig.ID)] = roundTrip(t, sig)
 				}
 			}
@@ -63,7 +69,7 @@ func TestGoldenReports(t *testing.T) {
 				if err := json.Unmarshal(raw, &m); err != nil {
 					t.Fatal(err)
 				}
-				if node, _ := m["node"].(string); node == source.Name || implemented[node] {
+				if node, _ := m["node"].(string); node == source.Name || implemented(node) {
 					wantSignals[id] = m
 				}
 			}
@@ -72,14 +78,14 @@ func TestGoldenReports(t *testing.T) {
 			// Events of implemented nodes, in order, ignoring event IDs.
 			var gotEvents, wantEvents []any
 			for _, e := range res.Log.Events() {
-				if implemented[e.Node] {
+				if implemented(e.Node) {
 					m := roundTrip(t, e)
 					delete(m, "id")
 					gotEvents = append(gotEvents, m)
 				}
 			}
 			for _, e := range want.Events {
-				if implemented[e["node"].(string)] {
+				if implemented(e["node"].(string)) {
 					delete(e, "id")
 					wantEvents = append(wantEvents, e)
 				}

@@ -35,7 +35,7 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 ## Status
 
-Early implementation. Built and tested against the thin-slice golden reports: the replay source, sdk-env, k8sattributes and Mimir backend nodes (plus batch as a pass-through). Rules, alerts, routing and report building are next. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
+Early implementation. Built and tested against the thin-slice golden reports: the replay source, sdk-env, k8sattributes, Mimir backend and recording-rule nodes (plus batch as a pass-through). Alerts, routing and report building (summary, diagnosis) are next. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
 
 - `testdata/thin-slice/`: hand-written fixtures for the first end-to-end slice (4 scenarios, golden reports). See its README.
 - `scripts/check_fixtures.py`: stopgap consistency check for the fixtures; delete once Go tests exist.
@@ -166,8 +166,11 @@ Other deployment patterns and backends come later, as adapters.
 - **`source/sdk-env`** (`internal/nodes/sdkenv`): as specified under Nodes. Also handles `OTEL_SERVICE_NAME` (it wins over `service.name` in `OTEL_RESOURCE_ATTRIBUTES`). Attribution compares the recorded `service.name` with each container's SDK service name. Malformed `OTEL_RESOURCE_ATTRIBUTES` gives `unverified`, since SDKs disagree on handling it.
 - **`collector/k8sattributes`** (`internal/nodes/k8sattributes`): pod association (resource attributes `k8s.pod.ip`, `k8s.pod.uid`, `container.id`, name + namespace; `connection` can't match in a replay); never overwrites existing attributes; container attributes need `k8s.container.name`, `container.id` or a single-container pod. Extracts namespace, pod name/uid, node, owner names (ReplicaSet, Deployment via `pod-template-hash`, StatefulSet, DaemonSet, Job), container name/id. Other attributes give `unverified`. Defaults for `extract.metadata` and `pod_association` follow the docs. **Unmodeled settings (e.g. `filter`, `extract.labels`) make the whole node `Unsupported`**, rather than being ignored.
 - **`backend/mimir-otlp`** (`internal/nodes/mimir`): runs Prometheus's OTLP translator per item with settings from Mimir limits (`promote_otel_resource_attributes`, `otel_metric_suffixes_enabled`, `otel_keep_identifying_resource_attributes`; unknown limits make the run fail to load). Legacy name validation, no delta temporality (rejected metrics get `dropped`). Outputs Prometheus-shaped series `p1, p2, ...`: data series first, then `target_info`; identical series from several inputs (e.g. `target_info` of one resource) become one series with several parents. Explains promotion in `derived` details and emits `skipped` for promoted attributes missing on the input.
+- **`rule/<record>`** (`internal/nodes/rules`, `internal/promqlx`, `internal/rulefile`): recording rules from rule files (Prometheus's `rulefmt`), evaluated once at `eval_time` in dependency order (a rule sees the outputs of rules it reads), with the real PromQL engine over in-memory series. The explainer gives each output's parents and `dropped` events for selector near-misses (series with the selector's metric name that a matcher rejects; `requires` detail names the label) and for unmatched `and`/`on(...)` sides. Outputs `r1, r2, ...` ordered by first parent. When the explainer says an output is possible but the engine produced none at this instant (too few samples for `rate()`, or a value filter), the inputs get **`unverified`, not `dropped`**. Unsupported constructs: outputs still come from the engine, with every selected series as parents, plus an `unverified` event.
+- **Explainer coverage** (`promqlx.Explain`): selectors, aggregations (`by`/`without`; topk-like pass through), label-keeping and name-dropping functions, `histogram_quantile`, `label_replace`, `label_join`, scalar and vector binary ops with `on`/`ignoring`/`group_left`/`group_right`, `and`/`or`/`unless`. Not yet: `count_values`, `absent*`, many-to-many, functions with several vector arguments. `TestExplainerAgreesWithEngine` checks it against the real engine on 25 expressions; add an expression there for every construct you add.
+- **Series keep all their samples** through the backend and rules, so range functions see the recorded history.
 - **batch**: pass-through. Any other processor type: `Unsupported` (data passes through, every item `unverified`).
-- Scenario runs: `internal/scenario.Run` wires replay → sdk-env → the collector pipeline's processors → backend.
+- Scenario runs: `internal/scenario.Run` wires replay → sdk-env → the collector pipeline's processors → backend → recording rules.
 - **Golden tests** (`internal/scenario/golden_test.go`) compare only nodes listed in `implemented`, in order, ignoring event IDs. Add a node there when it's built.
 
 ### Snapshot metadata
@@ -343,6 +346,8 @@ internal/graph            node interfaces, runner, PassThrough, Unsupported
 internal/kube             loading pods, env var resolution (downward API, $(VAR))
 internal/otelenv          SDK resource from OTEL_RESOURCE_ATTRIBUTES / OTEL_SERVICE_NAME
 internal/collector        minimal collector config reader
+internal/promqlx          real PromQL engine over in-memory series; the label-flow explainer
+internal/rulefile         rule files (rulefmt), dependency order
 internal/scenario         scenario loading, runs, golden tests
 internal/nodes/...        one package per node; nodetest has test helpers
 .github/workflows/ci.yml      gofmt, tidy, vet, tests, fixture check

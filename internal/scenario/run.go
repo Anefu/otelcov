@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -12,8 +13,10 @@ import (
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/nodes/k8sattributes"
 	"github.com/Anefu/otelcov/internal/nodes/mimir"
+	"github.com/Anefu/otelcov/internal/nodes/rules"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
+	"github.com/Anefu/otelcov/internal/rulefile"
 	"github.com/Anefu/otelcov/internal/unit"
 )
 
@@ -29,7 +32,7 @@ type Result struct {
 }
 
 // Run executes the scenario's graph as far as it is implemented: replay,
-// sdk-env, the collector pipeline's processors, then the backend.
+// sdk-env, the collector pipeline's processors, the backend, then recording rules.
 func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	snap, err := LoadSnapshot(s.Data.Snapshot)
 	if err != nil {
@@ -62,6 +65,20 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		nodes = append(nodes, processorNode(collectorPrefix+"/"+id, id, col.Processors[id], pods))
 	}
 	nodes = append(nodes, mimir.New(limits))
+
+	at, err := time.Parse(time.RFC3339, s.EvalTime)
+	if err != nil {
+		return nil, fmt.Errorf("eval_time: %w", err)
+	}
+	ruleSet, err := rulefile.Load(s.Config.Rules)
+	if err != nil {
+		return nil, fmt.Errorf("rules: %w", err)
+	}
+	ruleNode, err := rules.New(ruleSet.Recording, at)
+	if err != nil {
+		return nil, fmt.Errorf("rules: %w", err)
+	}
+	nodes = append(nodes, ruleNode)
 
 	log := lineage.NewLog()
 	src := source.New(s.Data.Recording, s.Rel(s.Data.Recording))

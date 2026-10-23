@@ -89,3 +89,4 @@ otelcol-contrib validate --config=collector/collector.yaml
 ## Changes to the golden reports
 
 - **Backend node built** with Prometheus's real OTLP translator: added the `target_info` series it emits (labels derived from the golden data itself, then confirmed against the translator), and dropped the hand-written `metric.why` explanation from backend `derived` details. Event IDs renumbered accordingly.
+- **Rule node built** with the real PromQL engine: rule `derived` details now carry the rule expression in Prometheus's canonical form (`expr`), instead of hand-split `selector` and `aggregation` strings.
