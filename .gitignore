@@ -1,0 +1,2 @@
+# Vendored dependencies live on deps/<branch> branches, never on source branches.
+/vendor/
