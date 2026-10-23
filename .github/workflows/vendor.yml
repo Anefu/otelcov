@@ -1,0 +1,57 @@
+# Resolves and vendors Go dependencies, then pushes the result to deps/<branch>.
+#
+# Why: development happens in an environment that can't reach the Go module
+# proxy. This workflow downloads modules with full checksum verification
+# (sum.golang.org) and publishes go.mod, go.sum and vendor/ on a side branch,
+# so builds elsewhere can run offline with -mod=vendor.
+#
+# Source branches never contain vendor/. Copy go.mod and go.sum back from the
+# deps branch when they change.
+name: vendor
+
+on:
+  push:
+    branches-ignore: ["deps/**"]
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - "**.go"
+      - ".github/workflows/vendor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vendor-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Resolve and vendor
+        run: |
+          go mod tidy
+          go mod verify
+          go mod vendor
+          # -tags tools also builds internal/deps, proving every pinned package was vendored.
+          go build -mod=vendor -tags tools ./...
+
+      - name: Push deps branch
+        env:
+          SOURCE_BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "deps/${SOURCE_BRANCH}"
+          git add -f go.mod go.sum vendor
+          git commit -q -m "Vendor dependencies for ${GITHUB_SHA}"
+          git push -f origin "deps/${SOURCE_BRANCH}"
