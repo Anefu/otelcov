@@ -43,6 +43,11 @@ type Limits struct {
 	OTelMetricSuffixesEnabled bool `json:"otel_metric_suffixes_enabled"`
 	// OTelKeepIdentifyingResourceAttributes keeps service.* attributes on target_info.
 	OTelKeepIdentifyingResourceAttributes bool `json:"otel_keep_identifying_resource_attributes"`
+
+	// RuntimeConfig is the config's runtime_config.file, if set: per-tenant
+	// overrides there can change these limits, and otelcov doesn't read them
+	// yet.
+	RuntimeConfig string `json:"-"`
 }
 
 // identifying resource attributes become job and instance, not target_info labels.
@@ -56,22 +61,28 @@ type Node struct {
 	settings prw.Settings
 }
 
-// Load reads Mimir limits from a file with a top-level "limits" key.
+// Load reads the limits section of a Mimir config file. Other sections
+// (storage, rings, ruler, ...) don't affect OTLP translation and are ignored;
+// a limit otelcov doesn't model is an error, since it might.
 func Load(path string) (Limits, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Limits{}, err
 	}
 	var f struct {
-		Limits map[string]any `json:"limits"`
+		Limits        map[string]any `json:"limits"`
+		RuntimeConfig struct {
+			File string `json:"file"`
+		} `json:"runtime_config"`
 	}
-	if err := yaml.UnmarshalStrict(data, &f); err != nil {
+	if err := yaml.Unmarshal(data, &f); err != nil {
 		return Limits{}, fmt.Errorf("%s: %w", path, err)
 	}
 	var l Limits
 	if err := collector.Decode(f.Limits, &l); err != nil {
 		return Limits{}, fmt.Errorf("%s: unsupported Mimir limits: %w", path, err)
 	}
+	l.RuntimeConfig = f.RuntimeConfig.File
 	return l, nil
 }
 
@@ -131,6 +142,12 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 		byKey   = map[string]*converted{}
 	)
 	for _, it := range in {
+		if n.limits.RuntimeConfig != "" {
+			out.Events = append(out.Events, lineage.Event{
+				Node: n.name, Signal: it.ID, Action: lineage.Unverified,
+				Reason: "Mimir's runtime config (" + n.limits.RuntimeConfig + ") can override these limits per tenant, and otelcov doesn't read it yet",
+			})
+		}
 		c := prw.NewPrometheusConverter()
 		_, err := c.FromMetrics(ctx, it.Data, n.settings)
 		series := c.TimeSeries()

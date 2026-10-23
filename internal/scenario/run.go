@@ -32,7 +32,8 @@ type Result struct {
 	Series map[string][]unit.Metric
 	// Alerts the alerting rules could produce.
 	Alerts []alerting.Alert
-	// Problems found while validating the topology (none fatal).
+	// Problems found in the inputs: unknown pod fields, topology validation
+	// (none fatal).
 	Problems []topology.Problem
 
 	pods []corev1.Pod
@@ -46,11 +47,22 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: %w", err)
 	}
-	snapPods, err := kube.LoadPods(snap.Pods)
+	var problems []topology.Problem
+	warned := map[string]bool{}
+	loadPods := func(path string) ([]corev1.Pod, error) {
+		pods, unknown, err := kube.LoadPods(path)
+		if err == nil && len(unknown) > 0 && !warned[path] {
+			warned[path] = true
+			problems = append(problems, topology.Problem{Severity: topology.Warning, Where: s.Rel(path),
+				Message: fmt.Sprintf("fields the Kubernetes %s API types in otelcov don't know were ignored: %s", kube.APIVersion, strings.Join(unknown, ", "))})
+		}
+		return pods, err
+	}
+	snapPods, err := loadPods(snap.Pods)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot pods: %w", err)
 	}
-	pods, err := kube.LoadPods(s.Config.Pods)
+	pods, err := loadPods(s.Config.Pods)
 	if err != nil {
 		return nil, fmt.Errorf("pods: %w", err)
 	}
@@ -88,7 +100,7 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		return nil, err
 	}
 
-	res := &Result{Log: log, Series: map[string][]unit.Metric{}, Problems: val.Problems, pods: pods}
+	res := &Result{Log: log, Series: map[string][]unit.Metric{}, Problems: append(problems, val.Problems...), pods: pods}
 	for _, name := range topology.Names(topo.Backends) {
 		limits, err := mimir.Load(topo.Backends[name].Config)
 		if err != nil {
@@ -163,6 +175,6 @@ func Report(ctx context.Context, s *Scenario) (*report.Report, error) {
 		return nil, fmt.Errorf("requirements: %w", err)
 	}
 	rep := report.Build(s.Name, s.EvalTime, res.Log, reqs, res.pods)
-	rep.Topology = res.Problems
+	rep.Problems = res.Problems
 	return rep, nil
 }

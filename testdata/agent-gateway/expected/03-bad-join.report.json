@@ -1020,7 +1020,7 @@
       }
     }
   ],
-  "topology": [
+  "problems": [
     {
       "severity": "unverified",
       "where": "agent/exporters/otlp/gateway -\u003e gateway/receivers/otlp",

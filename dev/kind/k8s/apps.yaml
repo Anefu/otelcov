@@ -1,0 +1,70 @@
+# Two vLLM stand-ins, one per worker. vllm-chat has one container, so
+# k8sattributes can name it. vllm-embed has a log-shipper sidecar, so its SDK
+# names its own container (the fix for the motivating bug).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-chat
+  namespace: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm
+      app.kubernetes.io/instance: vllm-chat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm
+        app.kubernetes.io/instance: vllm-chat
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: otelcov-worker
+      containers:
+        - name: vllm
+          image: otelcov-demo
+          env:
+            - {name: OTEL_SERVICE_NAME, value: vllm}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-agent.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "true"}
+            - {name: OTEL_METRIC_EXPORT_INTERVAL, value: "15000"}
+            - {name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE, value: delta}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-embed
+  namespace: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm
+      app.kubernetes.io/instance: vllm-embed
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm
+        app.kubernetes.io/instance: vllm-embed
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: otelcov-worker2
+      containers:
+        - name: vllm
+          image: otelcov-demo
+          env:
+            - {name: OTEL_SERVICE_NAME, value: vllm}
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: k8s.container.name=vllm}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-agent.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "true"}
+            - {name: OTEL_METRIC_EXPORT_INTERVAL, value: "15000"}
+            - {name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE, value: delta}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+        - name: log-shipper
+          image: busybox:1.37
+          command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]
+          resources:
+            requests: {cpu: 5m, memory: 8Mi}

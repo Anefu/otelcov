@@ -89,7 +89,7 @@ func Validate(f *File) *Validation {
 					tapped[r] = true
 				}
 				for _, pid := range Names(cfg.Service.Pipelines) {
-					if pid == c.Tap || !IsMetrics(pid) {
+					if c.Recording(pid) || !IsMetrics(pid) {
 						continue
 					}
 					for _, r := range cfg.Service.Pipelines[pid].Receivers {
@@ -98,6 +98,11 @@ func Validate(f *File) *Validation {
 						}
 					}
 				}
+			}
+		}
+		for _, sp := range c.SnapshotPipelines {
+			if _, ok := cfg.Service.Pipelines[sp]; !ok {
+				add(Fatal, name, "snapshot pipeline %q doesn't exist", sp)
 			}
 		}
 		for _, g := range c.FeatureGates {
@@ -170,7 +175,7 @@ func Validate(f *File) *Validation {
 			continue
 		}
 		exp, ok := cfg.Exporters[from.ID]
-		if !ok || !usedBy(cfg, from.ID, "exporters", f.Collectors[from.Collector].Tap) {
+		if !ok || !usedBy(cfg, from.ID, "exporters", f.Collectors[from.Collector]) {
 			add(Fatal, where, "exporter %s isn't defined or isn't used by any pipeline of %s", from.ID, from.Collector)
 			continue
 		}
@@ -191,9 +196,9 @@ func Validate(f *File) *Validation {
 	}
 	for _, name := range Names(configs) {
 		cfg := configs[name]
-		tap := f.Collectors[name].Tap
+		c := f.Collectors[name]
 		for _, pid := range Names(cfg.Service.Pipelines) {
-			if pid == tap || !IsMetrics(pid) {
+			if c.Recording(pid) || !IsMetrics(pid) {
 				continue
 			}
 			for _, e := range cfg.Service.Pipelines[pid].Exporters {
@@ -223,7 +228,7 @@ func checkJoin(f *File, configs map[string]*collector.Config, from Endpoint, exp
 		return "no collector " + to.Collector
 	}
 	rcv, ok := cfg.Receivers[to.ID]
-	if !ok || !usedBy(cfg, to.ID, "receivers", "") {
+	if !ok || !usedBy(cfg, to.ID, "receivers", f.Collectors[to.Collector]) {
 		return fmt.Sprintf("receiver %s isn't defined or isn't used by any pipeline of %s", to.ID, to.Collector)
 	}
 	if collector.Type(to.ID) != "otlp" {
@@ -299,11 +304,11 @@ func exporterPort(typ, endpoint string) (string, error) {
 	return p, nil
 }
 
-// usedBy reports whether a component is used by a metrics pipeline other than
-// skip.
-func usedBy(cfg *collector.Config, id, kind, skip string) bool {
+// usedBy reports whether a component is used by a modeled metrics pipeline
+// (not one that only records data for otelcov).
+func usedBy(cfg *collector.Config, id, kind string, c Collector) bool {
 	for pid, p := range cfg.Service.Pipelines {
-		if pid == skip || !IsMetrics(pid) {
+		if c.Recording(pid) || !IsMetrics(pid) {
 			continue
 		}
 		list := p.Receivers

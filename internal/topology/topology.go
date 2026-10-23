@@ -37,10 +37,27 @@ type Collector struct {
 	SHA256 string `json:"sha256,omitempty"`
 	// Tap is the pipeline that records this collector's input, if any.
 	Tap string `json:"tap,omitempty"`
+	// SnapshotPipelines exist only to record snapshot metadata (e.g. what
+	// resourcedetection detects). Like the tap, runs and validation skip them.
+	SnapshotPipelines []string `json:"snapshot_pipelines,omitempty"`
 	// FeatureGates as passed with --feature-gates: "gate" or "-gate".
 	FeatureGates []string `json:"feature_gates,omitempty"`
 	// Env provides values for ${env:VAR} references in the config.
 	Env map[string]string `json:"env,omitempty"`
+}
+
+// Recording reports whether a pipeline only records data for otelcov (the
+// tap or a snapshot pipeline), so it isn't part of the modeled system.
+func (c Collector) Recording(pipelineID string) bool {
+	if pipelineID == c.Tap {
+		return true
+	}
+	for _, p := range c.SnapshotPipelines {
+		if p == pipelineID {
+			return true
+		}
+	}
+	return false
 }
 
 // Backend is a storage backend.

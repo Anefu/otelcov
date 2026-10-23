@@ -32,7 +32,7 @@ func TestScenarioCommand(t *testing.T) {
 	}
 	for _, want := range []string{
 		"would set team=inference, but its condition is false",
-		"topology unverified: agent/exporters/otlp/gateway -> gateway/receivers/otlp: otlp/gateway sends to port 4318",
+		"  unverified: agent/exporters/otlp/gateway -> gateway/receivers/otlp: otlp/gateway sends to port 4318",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())

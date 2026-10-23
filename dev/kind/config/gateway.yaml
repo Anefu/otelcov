@@ -1,0 +1,37 @@
+# Gateway deployment: drops noise, sets team ownership, converts deltas,
+# writes to Mimir. debug is for humans and leaves the modeled system.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  filter/drop-debug:
+    metrics:
+      metric:
+        - name == "debug.heartbeat"
+  transform/team:
+    metric_statements:
+      - context: resource
+        statements:
+          - set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference"
+  deltatocumulative: {}
+  batch: {}
+
+exporters:
+  otlphttp/mimir:
+    endpoint: http://mimir.observability.svc.cluster.local:8080/otlp
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/drop-debug, transform/team, deltatocumulative, batch]
+      exporters: [otlphttp/mimir, debug]

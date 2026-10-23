@@ -1,0 +1,39 @@
+# What-if: a PR changes the team statement to namespace "inference-prod".
+# otelcov predicts both vLLM pods lose coverage. Deploy it with
+#   tilt args -- --gateway=whatif/gateway-team-pr.yaml
+# to check the prediction against the real stack.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  filter/drop-debug:
+    metrics:
+      metric:
+        - name == "debug.heartbeat"
+  transform/team:
+    metric_statements:
+      - context: resource
+        statements:
+          - set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"
+  deltatocumulative: {}
+  batch: {}
+
+exporters:
+  otlphttp/mimir:
+    endpoint: http://mimir.observability.svc.cluster.local:8080/otlp
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/drop-debug, transform/team, deltatocumulative, batch]
+      exporters: [otlphttp/mimir, debug]

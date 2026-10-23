@@ -1,0 +1,22 @@
+# Short waits so routed alerts show up quickly. Timing doesn't change routing.
+route:
+  receiver: platform-default
+  group_by: [alertname, k8s_namespace_name]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 1h
+  routes:
+    # team comes from the data (gateway transform), not from the rule.
+    - receiver: inference-pager
+      matchers:
+        - team="inference"
+        - severity="page"
+
+# alert-sink logs every notification it gets, by receiver.
+receivers:
+  - name: platform-default
+    webhook_configs:
+      - url: http://alert-sink.observability.svc.cluster.local:8080/platform-default
+  - name: inference-pager
+    webhook_configs:
+      - url: http://alert-sink.observability.svc.cluster.local:8080/inference-pager

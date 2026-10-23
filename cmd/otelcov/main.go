@@ -80,8 +80,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func printText(w io.Writer, rep *report.Report) {
 	fmt.Fprintf(w, "%s (evaluated at %s)\n", rep.Scenario, rep.EvalTime)
-	for _, p := range rep.Topology {
-		fmt.Fprintf(w, "  topology %s: %s: %s\n", p.Severity, p.Where, p.Message)
+	for _, p := range rep.Problems {
+		fmt.Fprintf(w, "  %s: %s: %s\n", p.Severity, p.Where, p.Message)
 	}
 	diag := map[string]report.Diagnosis{}
 	for _, d := range rep.Diagnosis {

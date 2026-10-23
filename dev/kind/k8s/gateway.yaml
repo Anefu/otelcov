@@ -1,0 +1,46 @@
+# The gateway. Its config is the otel-gateway-config ConfigMap, made by the
+# Tiltfile from config/gateway.yaml (or the --gateway variant).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-gateway
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-gateway
+    spec:
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.135.0
+          args: ["--config=/conf/gateway.yaml"]
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            # memory_limiter's limit_percentage needs a memory limit.
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: conf, mountPath: /conf}
+      volumes:
+        - name: conf
+          configMap:
+            name: otel-gateway-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  selector:
+    app.kubernetes.io/name: otel-gateway
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}

@@ -1,0 +1,19 @@
+groups:
+  - name: inference.vllm
+    interval: 30s
+    rules:
+      # Per pod, for the owning team. team is set by the gateway's transform.
+      - record: team:vllm_memory_bytes:max
+        expr: |
+          max by (k8s_cluster_name, k8s_namespace_name, k8s_pod_name, team) (
+            process_memory_usage_bytes{job="vllm", k8s_container_name="vllm", team="inference"}
+          )
+
+      # The threshold is low so the alert really fires in kind: compare checks
+      # otelcov's answer against real alerts. Thresholds don't change
+      # otelcov's coverage answer (decision 46).
+      - alert: VLLMMemoryHigh
+        expr: team:vllm_memory_bytes:max > 0
+        for: 1m
+        labels:
+          severity: page

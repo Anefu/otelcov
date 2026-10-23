@@ -1,0 +1,78 @@
+# What-if: the agent sends gRPC to the gateway's HTTP port (4318). The
+# gateway only listens on 4317, so nothing reaches Mimir. otelcov flags the
+# join as unverified before deploy. Deploy it with
+#   tilt args -- --agent=whatif/agent-badport.yaml
+# to see the real stack lose the data.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  k8sattributes:
+    auth_type: serviceAccount
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.ip
+      - sources:
+          - from: connection
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.node.name
+        - k8s.container.name
+  # env reads the agent's own OTEL_RESOURCE_ATTRIBUTES (host.name is the
+  # Kubernetes node name, see k8s/agent.yaml); system adds os.type and
+  # host.name, which env already set (the first detector wins).
+  resourcedetection:
+    detectors: [env, system]
+    override: false
+  resource:
+    attributes:
+      - key: k8s.cluster.name
+        value: kind-otelcov
+        action: upsert
+  batch: {}
+
+  # For otelcov only.
+  # The tap has no client connection to replay, so record the sender's pod IP.
+  k8sattributes/tap:
+    passthrough: true
+  # Same detectors as resourcedetection, with override on so every detected
+  # value shows up in metrics/detected. capture.sh checks the two match.
+  resourcedetection/capture:
+    detectors: [env, system]
+    override: true
+
+exporters:
+  otlp/gateway:
+    endpoint: otel-gateway.observability.svc.cluster.local:4318
+    tls:
+      insecure: true
+  file/tap:
+    path: /tap/metrics.otlp.jsonl
+    format: json
+  file/detected:
+    path: /tap/detected.otlp.jsonl
+    format: json
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [k8sattributes, resourcedetection, resource, batch]
+      exporters: [otlp/gateway]
+    metrics/tap:
+      receivers: [otlp]
+      processors: [k8sattributes/tap]
+      exporters: [file/tap]
+    metrics/detected:
+      receivers: [otlp]
+      processors: [k8sattributes/tap, resourcedetection/capture]
+      exporters: [file/detected]

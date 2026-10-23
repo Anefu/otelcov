@@ -1,0 +1,131 @@
+# -*- mode: Python -*-
+#
+# otelcov kind lab: daemonset agents (tapped) + gateway + Mimir + Alertmanager,
+# with two vLLM stand-ins. See README.md in this directory.
+#
+#   kind create cluster --config dev/kind/kind.yaml
+#   tilt up -f dev/kind/Tiltfile
+#
+# Deploy a what-if for real, and back:
+#   tilt args -- --gateway=whatif/gateway-team-pr.yaml
+#   tilt args -- --agent=whatif/agent-badport.yaml
+#   tilt args --clear
+
+CONTEXT = 'kind-otelcov'
+allow_k8s_contexts(CONTEXT)
+if k8s_context() != CONTEXT:
+    fail('Tilt is pointed at %s. Create the cluster (kind create cluster --config dev/kind/kind.yaml) or run: kubectl config use-context %s' % (k8s_context(), CONTEXT))
+
+config.define_string('agent', usage='agent collector config to deploy, relative to dev/kind (default config/agent.yaml)')
+config.define_string('gateway', usage='gateway collector config to deploy, relative to dev/kind (default config/gateway.yaml)')
+cfg = config.parse()
+AGENT_CONFIG = cfg.get('agent', 'config/agent.yaml')
+GATEWAY_CONFIG = cfg.get('gateway', 'config/gateway.yaml')
+
+# --- Configs ---------------------------------------------------------------
+# ConfigMaps are made here from the files, so editing a file (or switching a
+# variant) redeploys. Keys are fixed: the pods don't care which variant it is.
+
+def configmap(name, files):
+    data = {}
+    for key, path in files.items():
+        data[key] = str(read_file(path))
+    return {
+        'apiVersion': 'v1',
+        'kind': 'ConfigMap',
+        'metadata': {'name': name, 'namespace': 'observability'},
+        'data': data,
+    }
+
+configmaps = {
+    'otel-agent-config': configmap('otel-agent-config', {'agent.yaml': AGENT_CONFIG}),
+    'otel-gateway-config': configmap('otel-gateway-config', {'gateway.yaml': GATEWAY_CONFIG}),
+    'mimir-config': configmap('mimir-config', {'mimir.yaml': 'config/mimir.yaml'}),
+    'mimir-rules': configmap('mimir-rules', {'inference.rules.yaml': 'config/rules/inference.rules.yaml'}),
+    'alertmanager-config': configmap('alertmanager-config', {'alertmanager.yaml': 'config/alertmanager.yaml'}),
+}
+
+# Workloads restart when their config changes: a hash of it goes into the pod
+# template. Mimir doesn't restart for rules; its ruler re-reads them (15s,
+# after the kubelet updates the mounted ConfigMap, up to a minute).
+restart_on = {
+    'otel-agent': ['otel-agent-config'],
+    'otel-gateway': ['otel-gateway-config'],
+    'mimir': ['mimir-config'],
+    'alertmanager': ['alertmanager-config'],
+}
+
+objects = []
+for f in ['namespaces', 'agent', 'gateway', 'mimir', 'alertmanager', 'apps']:
+    objects.extend(read_yaml_stream('k8s/%s.yaml' % f))
+
+for o in objects:
+    names = restart_on.get(o['metadata']['name'])
+    if o['kind'] in ['Deployment', 'DaemonSet'] and names:
+        content = ''.join([str(encode_yaml(configmaps[n])) for n in names])
+        meta = o['spec']['template']['metadata']
+        annotations = meta.get('annotations') or {}
+        annotations['otelcov.dev/config-hash'] = str(hash(content))
+        meta['annotations'] = annotations
+
+k8s_yaml(encode_yaml_stream(objects + list(configmaps.values())))
+
+# --- Images ----------------------------------------------------------------
+# One image for the vLLM stand-ins and the Alertmanager webhook sink.
+docker_build('otelcov-demo', 'app')
+
+# --- Resources -------------------------------------------------------------
+
+k8s_resource(
+    new_name='setup',
+    objects=[
+        'observability:namespace',
+        'inference:namespace',
+        'otel-agent:serviceaccount',
+        'otel-agent:clusterrole',
+        'otel-agent:clusterrolebinding',
+    ],
+    labels=['setup'],
+)
+
+k8s_resource('mimir', objects=['mimir-config:configmap', 'mimir-rules:configmap', 'mimir-data:persistentvolumeclaim'],
+    port_forwards=['9009:8080'], resource_deps=['setup'], labels=['backend'],
+    links=[
+        link('http://localhost:9009/prometheus/api/v1/query?query=team:vllm_memory_bytes:max', 'rule output'),
+        link('http://localhost:9009/prometheus/api/v1/query?query=ALERTS', 'ALERTS'),
+    ])
+k8s_resource('alertmanager', objects=['alertmanager-config:configmap'], port_forwards=['9093:9093'],
+    resource_deps=['setup'], labels=['backend'])
+k8s_resource('alert-sink', resource_deps=['setup'], labels=['backend'])
+k8s_resource('otel-gateway', objects=['otel-gateway-config:configmap'], resource_deps=['setup', 'mimir'], labels=['collectors'])
+k8s_resource('otel-agent', objects=['otel-agent-config:configmap'], resource_deps=['setup', 'otel-gateway'], labels=['collectors'])
+k8s_resource('vllm-chat', resource_deps=['otel-agent'], labels=['apps'])
+k8s_resource('vllm-embed', resource_deps=['otel-agent'], labels=['apps'])
+
+# --- otelcov ---------------------------------------------------------------
+# Built once at startup and whenever its code changes. The three steps below
+# are manual: click them in order in the Tilt UI (or `tilt trigger <name>`).
+
+local_resource(
+    'otelcov-build',
+    cmd='cd ../.. && go build -o dev/kind/bin/ ./cmd/otelcov ./dev/kind/snapshot ./dev/kind/compare',
+    deps=['../../cmd', '../../internal', '../../go.mod', '../../go.sum', 'snapshot', 'compare'],
+    labels=['otelcov'],
+)
+
+# 1. Copy the agents' recordings off the cluster and build a snapshot.
+local_resource('capture', cmd='./capture.sh',
+    auto_init=False, trigger_mode=TRIGGER_MODE_MANUAL,
+    resource_deps=['otelcov-build', 'otel-agent'], labels=['otelcov'])
+
+# 2. Run every scenario on the capture. Exit status 1 (something not covered)
+#    is an answer, not a failure.
+local_resource('otelcov', cmd='bin/otelcov scenario captured/scenarios/*.yaml; test $? -le 1',
+    auto_init=False, trigger_mode=TRIGGER_MODE_MANUAL,
+    resource_deps=['otelcov-build'], labels=['otelcov'])
+
+# 3. Check otelcov's answers against Mimir and Alertmanager, for the scenarios
+#    whose configs are deployed right now.
+local_resource('compare', cmd='bin/compare captured/scenarios/*.yaml',
+    auto_init=False, trigger_mode=TRIGGER_MODE_MANUAL,
+    resource_deps=['otelcov-build', 'mimir', 'alertmanager'], labels=['otelcov'])
