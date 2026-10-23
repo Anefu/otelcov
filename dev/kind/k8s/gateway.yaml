@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: collector
-          image: otel/opentelemetry-collector-contrib:0.135.0
+          image: otel/opentelemetry-collector-contrib:0.134.1
           args: ["--config=/conf/gateway.yaml"]
           ports:
             - {name: otlp-grpc, containerPort: 4317}

@@ -5,7 +5,7 @@ A small cluster running the owner's topology for real, to check otelcov against 
 ```
 vllm-chat (1 container) ─┐                       ┌─▶ Mimir 3.2.3 ── ruler ──▶ Alertmanager 0.28.1 ──▶ alert-sink
 vllm-embed (+ sidecar) ──┴─▶ agent ──▶ gateway ──┤   (OTLP, limits)   (rules)   (routes)               (logs who got paged)
-          Python OTel SDK      daemonset   0.135  └─▶ debug
+          Python OTel SDK      daemonset   0.134  └─▶ debug
                             tap ▶ recordings
 ```
 
@@ -98,7 +98,7 @@ Editing `config/*.yaml` redeploys too. otelcov's topology (`otelcov/topology.yam
 
 ## Already checked without a cluster
 
-- Every collector config passes `otelcol-contrib validate` (0.135.0). The Alertmanager config passes `amtool check-config`, and both routes resolve as intended.
+- Every collector config passes `otelcol-contrib validate` (0.134.1, and earlier 0.135.0). The Alertmanager config passes `amtool check-config`, and both routes resolve as intended.
 - `tilt alpha tiltfile-result` evaluates the Tiltfile, including the `--gateway` variant, and puts every object in the intended resource.
 - The backend half ran locally with the real binaries (Mimir 3.2.3, Alertmanager 0.28.1, the 0.135 gateway, the sink), fed with what the agents would forward:
   - The ruler loaded the rules from the mounted layout, alerts fired, and both were routed to `inference-pager`.
@@ -111,6 +111,8 @@ Editing `config/*.yaml` redeploys too. otelcov's topology (`otelcov/topology.yam
 - The resourcedetection capture gives per-node values.
 - otelcov's answers on real data came out as expected.
 - compare agreed for the baseline, and, after it was deployed, for the gateway PR.
+- The motivating bug: after the apps what-if (`whatif/apps-embed-no-env.yaml`) was deployed, vllm-embed lost coverage at the recording rule, root cause the agent's k8sattributes, as otelcov predicted from the earlier capture. compare agreed for both pods.
+- These runs used collector 0.135.0. The lab has run 0.134.1 since (decision 37).
 
 ## Troubleshooting
 
