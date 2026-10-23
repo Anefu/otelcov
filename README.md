@@ -62,6 +62,10 @@ The topology file is checked on every run: an exporter sending to the wrong port
 
 `-json` prints the full report, with every signal and lineage event. The exit status is 1 when anything is not covered, so it can gate CI.
 
+## Try it on a cluster
+
+[`dev/kind/`](dev/kind/) runs daemonset agents, a gateway, Mimir and Alertmanager on a local kind cluster with Tilt. You capture what the agents record, run otelcov on it, and compare its answers with what Mimir and Alertmanager really did, including for a pull request you then deploy.
+
 ## Scope
 
 The first release targets one concrete stack: OpenTelemetry Collector daemonset agents and a gateway, Mimir and Loki, Prometheus-style rules, Alertmanager and Grafana dashboards. Everything is built as adapters behind generic interfaces, so other backends and deployment patterns can follow.

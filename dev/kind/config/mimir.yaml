@@ -1,0 +1,62 @@
+# Single-process Mimir for the kind lab: classic architecture, everything on
+# the /data volume, one tenant ("anonymous"). Based on Mimir's getting-started
+# config. Not for production.
+#
+# otelcov reads the limits section (internal/nodes/mimir). A limit it doesn't
+# model makes it refuse the config, since it might change OTLP translation.
+multitenancy_enabled: false
+
+server:
+  http_listen_port: 8080
+  grpc_listen_port: 9095
+  log_level: warn
+
+blocks_storage:
+  backend: filesystem
+  bucket_store:
+    sync_dir: /data/tsdb-sync
+  filesystem:
+    dir: /data/blocks
+  tsdb:
+    dir: /data/tsdb
+
+compactor:
+  data_dir: /data/compactor
+  sharding_ring:
+    kvstore:
+      store: memberlist
+
+distributor:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: memberlist
+
+ingester:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: memberlist
+    replication_factor: 1
+
+store_gateway:
+  sharding_ring:
+    replication_factor: 1
+
+# Rules come from the mounted ConfigMap: /etc/mimir/rules/<tenant>/<file>.
+# The Alertmanager URL is a command-line flag (k8s/mimir.yaml).
+ruler:
+  rule_path: /data/ruler
+  poll_interval: 15s
+  ring:
+    heartbeat_period: 2s
+    heartbeat_timeout: 10s
+
+ruler_storage:
+  backend: local
+  local:
+    directory: /etc/mimir/rules
+
+limits:
+  promote_otel_resource_attributes: "k8s.cluster.name,k8s.namespace.name,k8s.pod.name,k8s.container.name,k8s.node.name,team"
+  otel_metric_suffixes_enabled: true

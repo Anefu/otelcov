@@ -277,3 +277,35 @@ func TestSharedProcessorNames(t *testing.T) {
 		t.Errorf("want a copy for metrics/debug, exported by debug: %+v", log.Events())
 	}
 }
+
+// A pipeline that only records snapshot metadata is skipped like the tap:
+// its exporter needs no join, and no data flows through it.
+func TestSnapshotPipelines(t *testing.T) {
+	withDetect := [][3]string{
+		{"agent.yaml", "  file/tap: {path: /tmp/tap.jsonl}", "  file/tap: {path: /tmp/tap.jsonl}\n  file/detected: {path: /tmp/detected.jsonl}"},
+		{"agent.yaml", "    metrics/tap: {receivers: [otlp], exporters: [file/tap]}", "    metrics/tap: {receivers: [otlp], exporters: [file/tap]}\n    metrics/detected: {receivers: [otlp], processors: [batch], exporters: [file/detected]}"},
+	}
+	listed := append(withDetect, [3]string{"topology.yaml", "{config: agent.yaml, tap: metrics/tap}", "{config: agent.yaml, tap: metrics/tap, snapshot_pipelines: [metrics/detected]}"})
+
+	if got := problems(Validate(fixture(t, withDetect...)), Fatal); len(got) != 1 || !strings.Contains(got[0], "agent/exporters/file/detected: exporter isn't joined") {
+		t.Errorf("unlisted, the pipeline is modeled and its exporter unknown: %q", got)
+	}
+	f := fixture(t, listed...)
+	if v := Validate(f); len(v.Problems) != 0 {
+		t.Errorf("listed: want no problems, got %+v", v.Problems)
+	}
+	r, log := run(t, f)
+	if len(r.Delivered["mimir"]) != 1 {
+		t.Errorf("want s1 delivered once: %+v", r.Delivered["mimir"])
+	}
+	for _, e := range log.Events() {
+		if strings.Contains(e.Reason, "metrics/detected") || e.Node == "agent/file/detected" {
+			t.Errorf("no data should flow through the snapshot pipeline: %+v", e)
+		}
+	}
+
+	missing := fixture(t, [3]string{"topology.yaml", "{config: agent.yaml, tap: metrics/tap}", "{config: agent.yaml, tap: metrics/tap, snapshot_pipelines: [metrics/nope]}"})
+	if got := problems(Validate(missing), Fatal); len(got) != 1 || !strings.Contains(got[0], `snapshot pipeline "metrics/nope" doesn't exist`) {
+		t.Errorf("want missing snapshot pipeline fatal: %q", got)
+	}
+}

@@ -1,0 +1,11 @@
+# One control plane and two workers, so the agent daemonset runs twice and
+# per-node values (resourcedetection) differ.
+#   kind create cluster --config dev/kind/kind.yaml
+# Context: kind-otelcov. Nodes: otelcov-control-plane, otelcov-worker, otelcov-worker2.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: otelcov
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

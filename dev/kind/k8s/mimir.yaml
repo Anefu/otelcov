@@ -1,0 +1,74 @@
+# Single-process Mimir (-target=all includes the ruler). Data lives on a
+# PersistentVolumeClaim (kind's local-path provisioner), so restarts keep it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mimir-data
+  namespace: observability
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mimir
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: mimir
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mimir
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mimir
+    spec:
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: mimir
+          image: grafana/mimir:3.2.3
+          args:
+            - -config.file=/etc/mimir/config/mimir.yaml
+            - -ruler.alertmanager-url=http://alertmanager.observability.svc.cluster.local:9093
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: grpc, containerPort: 9095}
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            initialDelaySeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/mimir/config}
+            # Tenant "anonymous": multitenancy is off.
+            - {name: rules, mountPath: /etc/mimir/rules/anonymous}
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: config
+          configMap:
+            name: mimir-config
+        - name: rules
+          configMap:
+            name: mimir-rules
+        - name: data
+          persistentVolumeClaim:
+            claimName: mimir-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mimir
+  namespace: observability
+spec:
+  selector:
+    app.kubernetes.io/name: mimir
+  ports:
+    - {name: http, port: 8080, targetPort: http}

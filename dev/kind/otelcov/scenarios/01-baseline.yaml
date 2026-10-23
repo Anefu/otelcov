@@ -1,0 +1,15 @@
+# Template: capture.sh writes this to captured/scenarios/ with eval_time set to
+# the recording's last timestamp. Paths are relative to captured/scenarios/.
+# As deployed by default (config/).
+name: 01-baseline
+eval_time: ${EVAL_TIME}
+
+data:
+  recording: ../recording.otlp.jsonl
+  snapshot: ../snapshot.meta.yaml
+
+config:
+  pods: ../pods.yaml
+  topology: ../../otelcov/topology.yaml
+
+requirements: ../../otelcov/requirements.yaml

@@ -68,8 +68,9 @@ type Report struct {
 	Diagnosis []Diagnosis                         `json:"diagnosis"`
 	Signals   map[lineage.SignalID]lineage.Signal `json:"signals"`
 	Events    []lineage.Event                     `json:"events"`
-	// Topology lists non-fatal problems found validating the topology.
-	Topology []topology.Problem `json:"topology,omitempty"`
+	// Problems lists non-fatal problems found in the inputs: topology
+	// validation, pod fields otelcov doesn't know.
+	Problems []topology.Problem `json:"problems,omitempty"`
 }
 
 // Build answers the requirements from a run's lineage. pods are the pods of

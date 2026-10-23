@@ -97,10 +97,10 @@ func (r *Runner) flow(ctx context.Context, coll string, receivers map[string]boo
 		return nil
 	}
 	cfg := r.configs[coll]
-	tap := r.f.Collectors[coll].Tap
+	c := r.f.Collectors[coll]
 	var pipelines []string
 	for _, pid := range Names(cfg.Service.Pipelines) {
-		if pid == tap || !IsMetrics(pid) {
+		if c.Recording(pid) || !IsMetrics(pid) {
 			continue
 		}
 		for _, rc := range cfg.Service.Pipelines[pid].Receivers {
@@ -187,7 +187,7 @@ func (r *Runner) pipelineNodes(ctx context.Context, coll, pid string) ([]graph.M
 	cfg := r.configs[coll]
 	shared := map[string]int{}
 	for p, pl := range cfg.Service.Pipelines {
-		if IsMetrics(p) && p != r.f.Collectors[coll].Tap {
+		if IsMetrics(p) && !r.f.Collectors[coll].Recording(p) {
 			for _, id := range pl.Processors {
 				shared[id]++
 			}

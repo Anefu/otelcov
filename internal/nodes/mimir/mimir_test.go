@@ -2,6 +2,8 @@ package mimir
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -87,5 +89,55 @@ func TestSamplesOfOneSeriesAreKept(t *testing.T) {
 		if s := unit.SeriesSamples(it.Data); len(s) != 2 || s[1].V != 9 || len(it.From) != 2 {
 			t.Errorf("want one series with both samples and both parents, got %v from %v", s, it.From)
 		}
+	}
+}
+
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "mimir.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadFullConfig(t *testing.T) {
+	// A real Mimir config: only limits matter for translation.
+	l, err := Load(writeConfig(t, `
+multitenancy_enabled: false
+server: {http_listen_port: 8080}
+blocks_storage: {backend: filesystem}
+limits:
+  promote_otel_resource_attributes: "k8s.pod.name,team"
+  otel_metric_suffixes_enabled: true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.PromoteOTelResourceAttributes != "k8s.pod.name,team" || !l.OTelMetricSuffixesEnabled || l.RuntimeConfig != "" {
+		t.Errorf("limits: %+v", l)
+	}
+
+	// A limit otelcov doesn't model might change translation: refuse.
+	if _, err := Load(writeConfig(t, "limits:\n  otel_translation_strategy: NoTranslation\n")); err == nil || !strings.Contains(err.Error(), "otel_translation_strategy") {
+		t.Errorf("want an error naming the unmodeled limit, got %v", err)
+	}
+}
+
+func TestRuntimeConfigIsUnverified(t *testing.T) {
+	l, err := Load(writeConfig(t, "runtime_config: {file: /etc/mimir/runtime.yaml}\nlimits: {otel_metric_suffixes_enabled: true}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := New("mimir", l).ProcessMetrics(context.Background(), []unit.Metric{item("s1", pmetric.AggregationTemporalityCumulative, "m")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unverified bool
+	for _, e := range out.Events {
+		unverified = unverified || (e.Signal == "s1" && e.Action == lineage.Unverified && strings.Contains(e.Reason, "/etc/mimir/runtime.yaml"))
+	}
+	if !unverified {
+		t.Errorf("want s1 unverified because of the runtime config: %+v", out.Events)
 	}
 }

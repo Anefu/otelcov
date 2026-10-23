@@ -67,3 +67,4 @@ and update the `sha256` fields, or the report will warn that the topology may be
 ## Changes to the golden reports
 
 - **Created** together with the topology runner, real processor nodes and OTTL statement explanations. Reviewed by hand: 01 covered for both pods; 02 not covered for both, root cause the skipped `transform/team` statement, then Mimir's `skipped` promotion of `team`, then the rule's `dropped`; 03 unverified for both via the join event.
+- **Report section renamed**: `topology` is now `problems` (03), since it also carries pod fields otelcov doesn't know. Nothing else changed.

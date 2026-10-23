@@ -1,0 +1,32 @@
+# What-if: the gateway PR in whatif/gateway-team-pr.yaml.
+# No sha256 values: these configs are meant to be edited while experimenting.
+version: 1
+collectors:
+  agent:
+    config: ../config/agent.yaml
+    tap: metrics/tap
+    # Records what resourcedetection adds; capture.sh turns it into snapshot
+    # metadata. Not part of the modeled system.
+    snapshot_pipelines: [metrics/detected]
+  gateway:
+    config: ../whatif/gateway-team-pr.yaml
+backends:
+  mimir:
+    type: mimir-otlp
+    config: ../config/mimir.yaml
+consumers:
+  rules:
+    type: prometheus-rules
+    paths: [../config/rules/inference.rules.yaml]
+    reads: mimir
+  alertmanager:
+    type: alertmanager
+    config: ../config/alertmanager.yaml
+    reads: rules
+external:
+  - gateway/exporters/debug
+joins:
+  - from: agent/exporters/otlp/gateway
+    to: gateway/receivers/otlp
+  - from: gateway/exporters/otlphttp/mimir
+    to: mimir
