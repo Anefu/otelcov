@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Anefu/otelcov/internal/nodes/alerts"
 	"github.com/Anefu/otelcov/internal/nodes/mimir"
+	"github.com/Anefu/otelcov/internal/nodes/route"
 	"github.com/Anefu/otelcov/internal/nodes/rules"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
@@ -24,10 +26,11 @@ var implementedNodes = map[string]bool{
 	sdkenv.Name:               true,
 	"collector/k8sattributes": true,
 	mimir.Name:                true,
+	route.Name:                true,
 }
 
 func implemented(node string) bool {
-	return implementedNodes[node] || strings.HasPrefix(node, rules.Prefix)
+	return implementedNodes[node] || strings.HasPrefix(node, rules.Prefix) || strings.HasPrefix(node, alerts.Prefix)
 }
 
 type golden struct {

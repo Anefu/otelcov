@@ -35,7 +35,7 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 ## Status
 
-Early implementation. Built and tested against the thin-slice golden reports: the replay source, sdk-env, k8sattributes, Mimir backend and recording-rule nodes (plus batch as a pass-through). Alerts, routing and report building (summary, diagnosis) are next. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
+Early implementation. Built and tested against the thin-slice golden reports: every node of the thin slice: replay, sdk-env, k8sattributes, Mimir backend, recording rules, alerting rules and Alertmanager routing (plus batch as a pass-through). Report building (summary per requirement, diagnosis) is next. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
 
 - `testdata/thin-slice/`: hand-written fixtures for the first end-to-end slice (4 scenarios, golden reports). See its README.
 - `scripts/check_fixtures.py`: stopgap consistency check for the fixtures; delete once Go tests exist.
@@ -168,9 +168,11 @@ Other deployment patterns and backends come later, as adapters.
 - **`backend/mimir-otlp`** (`internal/nodes/mimir`): runs Prometheus's OTLP translator per item with settings from Mimir limits (`promote_otel_resource_attributes`, `otel_metric_suffixes_enabled`, `otel_keep_identifying_resource_attributes`; unknown limits make the run fail to load). Legacy name validation, no delta temporality (rejected metrics get `dropped`). Outputs Prometheus-shaped series `p1, p2, ...`: data series first, then `target_info`; identical series from several inputs (e.g. `target_info` of one resource) become one series with several parents. Explains promotion in `derived` details and emits `skipped` for promoted attributes missing on the input.
 - **`rule/<record>`** (`internal/nodes/rules`, `internal/promqlx`, `internal/rulefile`): recording rules from rule files (Prometheus's `rulefmt`), evaluated once at `eval_time` in dependency order (a rule sees the outputs of rules it reads), with the real PromQL engine over in-memory series. The explainer gives each output's parents and `dropped` events for selector near-misses (series with the selector's metric name that a matcher rejects; `requires` detail names the label) and for unmatched `and`/`on(...)` sides. Outputs `r1, r2, ...` ordered by first parent. When the explainer says an output is possible but the engine produced none at this instant (too few samples for `rate()`, or a value filter), the inputs get **`unverified`, not `dropped`**. Unsupported constructs: outputs still come from the engine, with every selected series as parents, plus an `unverified` event.
 - **Explainer coverage** (`promqlx.Explain`): selectors, aggregations (`by`/`without`; topk-like pass through), label-keeping and name-dropping functions, `histogram_quantile`, `label_replace`, `label_join`, scalar and vector binary ops with `on`/`ignoring`/`group_left`/`group_right`, `and`/`or`/`unless`. Not yet: `count_values`, `absent*`, many-to-many, functions with several vector arguments. `TestExplainerAgreesWithEngine` checks it against the real engine on 25 expressions; add an expression there for every construct you add.
+- **`alert/<alertname>`** (`internal/nodes/alerts`, `internal/alerting`): alerting rules evaluated like recording rules (shared `internal/ruleeval`), outputs are `alerting.Alert` values `a1, a2, ...` with series labels minus `__name__`, rule labels and `alertname`. Templated rule labels (`{{ ... }}`) aren't expanded yet: `unverified`. `derived` details carry `expr`, `evaluated_as` (after the rewrite) and `for`.
+- **`alertmanager/route`** (`internal/nodes/route`): Alertmanager's own config loader and routing tree (`dispatch.Route.Match`, `continue` respected). `routed` events carry the receiver and the route path (matchers in Alertmanager's sorted order). A receiver without integrations gives `dropped`. Mute/active time intervals on the matched route and inhibit rules targeting the alert give `unverified` (not modeled yet). Silences are runtime state and out of scope.
 - **Series keep all their samples** through the backend and rules, so range functions see the recorded history.
 - **batch**: pass-through. Any other processor type: `Unsupported` (data passes through, every item `unverified`).
-- Scenario runs: `internal/scenario.Run` wires replay → sdk-env → the collector pipeline's processors → backend → recording rules.
+- Scenario runs: `internal/scenario.Run` wires replay → sdk-env → the collector pipeline's processors → backend → recording rules (metrics graph), then alerting rules and routing as separate stages logged with `graph.Record`.
 - **Golden tests** (`internal/scenario/golden_test.go`) compare only nodes listed in `implemented`, in order, ignoring event IDs. Add a node there when it's built.
 
 ### Snapshot metadata
@@ -240,13 +242,13 @@ Other deployment patterns and backends come later, as adapters.
 | 43 | After the backend node, series are **Prometheus-shaped** `pmetric`: Prometheus name, all labels as data-point attributes, empty resource | OTLP-shaped, translated when queried | Matches what Mimir stores; rule outputs fit the same shape; trivial conversion for PromQL |
 | 44 | Alerts are a small Go type of our own, the one exception to decision 35 | `plog` log records | Alerts have state over time and a fixed schema; no collector code runs on them, and Alertmanager needs plain label sets anyway |
 | 45 | Prometheus and Alertmanager at the versions collector-contrib 0.135 uses (Prometheus commit `419d436a447a`, Alertmanager v0.28.1); OTLP → series uses Prometheus's own translator (`prometheusremotewrite`) | Mimir's fork of the translator (AGPL, can't be imported) | Real code; versions consistent with the collector pin |
+| 46 | Coverage ignores values: rules (recording and alerting) are rewritten so comparisons become `bool` and `topk`/`bottomk`/`limitk`/`limit_ratio` pass their input through, then evaluated with the real engine; `for` is treated as met | Strip comparisons and evaluate the left side; explainer only | Owner's point: thresholds don't change *whether* a series is watched, only labels and matching do. The rewrite keeps the real engine as the check on the explainer. Whether thresholds are *realistic* (units, impossible values) is a separate, later check |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
 Treat these as open; ask before building on them.
 
 - **Pod association for replays**: the tap runs `k8sattributes` in `passthrough` mode so recordings carry `k8s.pod.ip` (a file has no client connection). Alternative: SDKs set `k8s.pod.uid` via the downward API and the tap stays processor-free.
-- **"Covered" means watched**: the pod's series reaches the alert's input, threshold ignored. A promtool test shows it matches real firing with bad values.
 - **Golden-test strictness**: compare `summary` and `diagnosis` exactly; for `events`, require expected events to be present and ignore extras.
 - **Report schema details**: signal ID prefixes (`s`, `p`, `r`, `a`), field names, the `covered_simulated` status.
 - **Repository layout**: fixtures in `testdata/` (Go convention).
@@ -348,6 +350,8 @@ internal/otelenv          SDK resource from OTEL_RESOURCE_ATTRIBUTES / OTEL_SERV
 internal/collector        minimal collector config reader
 internal/promqlx          real PromQL engine over in-memory series; the label-flow explainer
 internal/rulefile         rule files (rulefmt), dependency order
+internal/ruleeval         one expression for coverage: rewrite, engine, explainer, parents
+internal/alerting         the Alert type
 internal/scenario         scenario loading, runs, golden tests
 internal/nodes/...        one package per node; nodetest has test helpers
 .github/workflows/ci.yml      gofmt, tidy, vet, tests, fixture check

@@ -166,3 +166,38 @@ func keys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+func TestStructural(t *testing.T) {
+	for in, want := range map[string]string{
+		`x > 12e9`:                         `x > bool 12000000000`,
+		`sum by (job) (rate(x[5m])) < 0.5`: `sum by (job) (rate(x[5m])) < bool 0.5`,
+		`a < on (job) b`:                   `a < bool on (job) b`,
+		`topk(3, x) > 1`:                   `x > bool 1`,
+		`x and y > 2`:                      `x and y > bool 2`,
+		`max by (a) (x)`:                   `max by (a) (x)`,
+	} {
+		e, err := Structural(mustParse(t, in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.String() != want {
+			t.Errorf("Structural(%s) = %s, want %s", in, e, want)
+		}
+	}
+	// The input isn't modified.
+	orig := mustParse(t, `x > 1`)
+	if _, err := Structural(orig); err != nil || orig.String() != `x > 1` {
+		t.Errorf("input modified: %s", orig)
+	}
+
+	// Rewritten expressions keep every series that could pass, per the engine.
+	series := testSeries()
+	e, _ := Structural(mustParse(t, `up == 1`))
+	vec, err := NewEngine().Instant(context.Background(), e.String(), series, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vec) != 3 {
+		t.Errorf("want all 3 up series (one is 0), got %d", len(vec))
+	}
+}

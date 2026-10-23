@@ -90,3 +90,4 @@ otelcol-contrib validate --config=collector/collector.yaml
 
 - **Backend node built** with Prometheus's real OTLP translator: added the `target_info` series it emits (labels derived from the golden data itself, then confirmed against the translator), and dropped the hand-written `metric.why` explanation from backend `derived` details. Event IDs renumbered accordingly.
 - **Rule node built** with the real PromQL engine: rule `derived` details now carry the rule expression in Prometheus's canonical form (`expr`), instead of hand-split `selector` and `aggregation` strings.
+- **Alert and route nodes built**: alert `derived` details now carry the expression, what was evaluated after the threshold rewrite, and `for`; route matchers are in Alertmanager's own order (sorted by label name); routing events follow all alert events, since each stage logs in turn.
