@@ -176,7 +176,8 @@ func TestStatementExplanations(t *testing.T) {
 	if set == nil || !strings.Contains(set.Reason, `"gpu"`) {
 		t.Errorf("tier set should name its statement: %+v", set)
 	}
-	if skipped == nil || skipped.Detail["would_set"] != "search" || skipped.Detail["condition"] != false {
+	if skipped == nil || skipped.Detail["would_set"] != "search" || skipped.Detail["condition"] != false ||
+		skipped.Detail["where"] != `attributes["k8s.namespace.name"] == "search"` {
 		t.Errorf("the search statement should be skipped with what it would set: %+v", skipped)
 	}
 	if removed == nil || removed.Detail["statement"] != `delete_key(attributes, "user_id")` {

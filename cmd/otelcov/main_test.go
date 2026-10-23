@@ -14,7 +14,7 @@ func TestScenarioCommand(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1 (not covered); stderr: %s", code, errs.String())
 	}
-	for _, want := range []string{"NOT COVERED", "vllm-embed", "collector/k8sattributes didn't set", "fix: Set k8s.container.name=vllm"} {
+	for _, want := range []string{"NOT COVERED", "vllm-embed", "`collector/k8sattributes` didn't set", "fix: Set `k8s.container.name=vllm`"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
@@ -33,7 +33,7 @@ func TestScenarioCommand(t *testing.T) {
 		t.Fatalf("exit %d, want 1; stderr: %s", code, errs.String())
 	}
 	for _, want := range []string{
-		"would set team=inference, but its condition is false",
+		"fix: Make the condition `attributes[\"k8s.namespace.name\"] == \"inference-prod\"` in `gateway/transform/team` hold for this pod, or set `team` another way.",
 		"  unverified: agent/exporters/otlp/gateway -> gateway/receivers/otlp: otlp/gateway sends to port 4318",
 	} {
 		if !strings.Contains(out.String(), want) {

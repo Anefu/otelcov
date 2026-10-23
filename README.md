@@ -40,9 +40,9 @@ $ go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.y
       path: s1 → p1 → r1 → a1 → inference-pager
   NOT COVERED          inference/vllm-embed-5c8b9d6f7b-q4m9t  [vllm-memory-watched]
       path: s2 → p2 ✗ rule/inference:vllm_memory_bytes:max
-      why: rule inference:vllm_memory_bytes:max only selects series matching k8s_container_name="vllm", and this pod's series has no k8s_container_name label, so it never reaches VLLMMemoryHigh. k8s_container_name comes from resource attribute k8s.container.name, which collector/k8sattributes didn't set: pod has 2 containers (vllm, log-shipper) and the resource has neither container.id nor k8s.container.name, so the container can't be identified.
-      fix: Set k8s.container.name=vllm in OTEL_RESOURCE_ATTRIBUTES on the vllm container.
-      fix: Or have the SDK send container.id, so k8sattributes can match the container.
+      why: Rule `inference:vllm_memory_bytes:max` only selects series matching `k8s_container_name="vllm"`, and this pod's series has no `k8s_container_name` label, so it never reaches `VLLMMemoryHigh`. `k8s_container_name` comes from resource attribute `k8s.container.name`, which `collector/k8sattributes` didn't set: pod has 2 containers (vllm, log-shipper) and the resource has neither `container.id` nor `k8s.container.name`, so the container can't be identified.
+      fix: Set `k8s.container.name=vllm` in `OTEL_RESOURCE_ATTRIBUTES` on the `vllm` container.
+      fix: Or have the SDK send `container.id`, so k8sattributes can match the container.
 ```
 
 Processors explain themselves too. Here a pull request changes the condition of a gateway `transform` statement, and the rule's `team="inference"` matcher loses both pods:
@@ -52,9 +52,8 @@ $ go run ./cmd/otelcov scenario testdata/agent-gateway/scenarios/02-team-conditi
 02-team-condition-pr (evaluated at 2026-10-23T10:00:30Z)
   NOT COVERED          inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
       path: s1 → p1 ✗ rule/team:vllm_memory_bytes:max
-      why: rule team:vllm_memory_bytes:max only selects series matching team="inference", and this pod's series has no team label, so it never reaches VLLMMemoryHigh. team comes from resource attribute team, which gateway/transform/team didn't set: resource statement `set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"` didn't run: its condition is false for this signal.
-      fix: Statement `set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"` in gateway/transform/team would set team=inference, but its condition is false for this pod.
-      fix: Fix the condition, or set team another way.
+      why: Rule `team:vllm_memory_bytes:max` only selects series matching `team="inference"`, and this pod's series has no `team` label, so it never reaches `VLLMMemoryHigh`. `team` comes from resource attribute `team`, which `gateway/transform/team` didn't set: resource statement `set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"` didn't run: its condition is false for this signal.
+      fix: Make the condition `attributes["k8s.namespace.name"] == "inference-prod"` in `gateway/transform/team` hold for this pod, or set `team` another way.
   ...
 ```
 

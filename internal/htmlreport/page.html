@@ -52,7 +52,12 @@ body {
   font-variant-ligatures: no-contextual;
   font-feature-settings: "calt" 0;
 }
-code, .mono { font-family: var(--mono); font-size: 0.9em; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; letter-spacing: -0.01em; }
+/* Code inside sentences: smaller, and tinted so a long statement reads as one unit. */
+.notes code, .ev .why code, .route-head code, .problems code {
+  font-size: 0.82em; padding: 0.05em 0.3em; border-radius: 3px; background: var(--wash);
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
 a { color: inherit; }
 button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -514,7 +519,11 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     var notes = h("ul", { class: "notes" });
     if (d) {
       notes.appendChild(h("li", { class: "why" }, h("span", { class: "k", text: "Why" }), prose(d.explanation)));
-      (d.hints || []).forEach(function (x) { notes.appendChild(h("li", { class: "fix" }, h("span", { class: "k", text: "Fix" }), prose(x))); });
+      // One "Fix" block: later hints are alternatives ("Or ...").
+      if ((d.hints || []).length) {
+        notes.appendChild(h("li", { class: "fix" }, h("span", { class: "k", text: "Fix" }),
+          d.hints.map(function (x, i) { return [i ? " " : "", prose(x)]; })));
+      }
     }
     if (e.reason) notes.appendChild(h("li", { class: "warn" }, prose(e.reason)));
     (e.unverified_by || []).forEach(function (id) {
