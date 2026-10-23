@@ -237,11 +237,11 @@ func (t truth) String() string {
 	if len(t.metrics) == 0 {
 		parts = append(parts, "no series in Mimir")
 	} else {
-		parts = append(parts, "series: "+strings.Join(t.metrics, ","))
+		parts = append(parts, "series: "+strings.Join(t.metrics, ", "))
 	}
 	switch {
 	case len(t.receivers) > 0:
-		parts = append(parts, "alert routed to "+strings.Join(t.receivers, ","))
+		parts = append(parts, "alert routed to "+strings.Join(t.receivers, ", "))
 	case t.ruler != "":
 		parts = append(parts, "alert "+t.ruler+" in the ruler")
 	default:

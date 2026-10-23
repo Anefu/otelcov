@@ -111,7 +111,7 @@ Editing `config/*.yaml` redeploys too. otelcov's topology (`otelcov/topology.yam
 - The resourcedetection capture gives per-node values.
 - otelcov's answers on real data came out as expected.
 - compare agreed for the baseline, and, after it was deployed, for the gateway PR.
-- The motivating bug: after the apps what-if (`whatif/apps-embed-no-env.yaml`) was deployed, vllm-embed lost coverage at the recording rule, root cause the agent's k8sattributes, as otelcov predicted from the earlier capture. compare agreed for both pods.
+- The motivating bug: with the apps what-if (`whatif/apps-embed-no-env.yaml`) deployed, otelcov found vllm-embed not covered, broken at the recording rule with the agent's k8sattributes as the root cause, and vllm-chat still covered. compare agreed for both pods.
 - These runs used collector 0.135.0. The lab has run 0.134.1 since (decision 37).
 
 ## Troubleshooting
