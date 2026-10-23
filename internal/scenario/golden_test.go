@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Anefu/otelcov/internal/nodes/mimir"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
 )
@@ -20,6 +21,7 @@ const fixtures = "../../testdata/thin-slice"
 var implemented = map[string]bool{
 	sdkenv.Name:               true,
 	"collector/k8sattributes": true,
+	mimir.Name:                true,
 }
 
 type golden struct {
@@ -51,7 +53,7 @@ func TestGoldenReports(t *testing.T) {
 			// Source signals.
 			got := map[string]any{}
 			for _, sig := range res.Log.Signals() {
-				if sig.Node == source.Name {
+				if sig.Node == source.Name || implemented[sig.Node] {
 					got[string(sig.ID)] = roundTrip(t, sig)
 				}
 			}
@@ -61,11 +63,11 @@ func TestGoldenReports(t *testing.T) {
 				if err := json.Unmarshal(raw, &m); err != nil {
 					t.Fatal(err)
 				}
-				if m["node"] == source.Name {
+				if node, _ := m["node"].(string); node == source.Name || implemented[node] {
 					wantSignals[id] = m
 				}
 			}
-			diff(t, "source signals", got, wantSignals)
+			diff(t, "signals", got, wantSignals)
 
 			// Events of implemented nodes, in order, ignoring event IDs.
 			var gotEvents, wantEvents []any
