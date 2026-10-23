@@ -17,8 +17,8 @@ import (
 	"github.com/Anefu/otelcov/internal/unit"
 )
 
-// copyNode names lineage for copies made where data fans out.
-const copyNode = "topology"
+// CopyNode is the lineage node of copies made where data fans out.
+const CopyNode = "topology"
 
 // Inputs are what a run needs besides the topology.
 type Inputs struct {
@@ -261,15 +261,15 @@ func (r *Runner) copies(items []unit.Metric, reason string) ([]unit.Metric, erro
 		it.Data.CopyTo(data)
 		from := []lineage.SignalID{it.ID}
 		out[i] = unit.Metric{ID: id, From: from, Data: data}
-		signals = append(signals, lineage.Signal{ID: id, Node: copyNode, Kind: "otlp_metric",
+		signals = append(signals, lineage.Signal{ID: id, Node: CopyNode, Kind: "otlp_metric",
 			Name: unit.FirstMetric(data).Name(), From: from, Resource: unit.Resource(data).Attributes().AsRaw()})
-		events = append(events, lineage.Event{Node: copyNode, Signal: id, Action: lineage.Derived, From: from, Reason: reason})
+		events = append(events, lineage.Event{Node: CopyNode, Signal: id, Action: lineage.Derived, From: from, Reason: reason})
 	}
 	ids := make([]lineage.SignalID, len(out))
 	for i, it := range out {
 		ids[i] = it.ID
 	}
-	return out, graph.Record(r.log, copyNode, events, signals, ids)
+	return out, graph.Record(r.log, CopyNode, events, signals, ids)
 }
 
 func (r *Runner) record(node string, events []lineage.Event) error {
