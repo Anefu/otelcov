@@ -10,6 +10,23 @@ require (
 	github.com/prometheus/common v0.65.0
 	github.com/prometheus/otlptranslator v0.0.0-20250620074007-94f535e0c588
 	github.com/prometheus/prometheus v0.304.3-0.20250703114031-419d436a447a
+	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.135.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.135.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.135.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.135.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.135.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.135.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.135.0
+	go.opentelemetry.io/collector/component v1.41.0
+	go.opentelemetry.io/collector/component/componenttest v0.135.0
+	go.opentelemetry.io/collector/confmap v1.41.0
+	go.opentelemetry.io/collector/confmap/xconfmap v0.135.0
+	go.opentelemetry.io/collector/consumer v1.41.0
+	go.opentelemetry.io/collector/consumer/consumertest v0.135.0
+	go.opentelemetry.io/collector/featuregate v1.41.0
+	go.opentelemetry.io/collector/pipeline v1.41.0
+	go.opentelemetry.io/collector/processor v1.41.0
+	go.opentelemetry.io/collector/processor/processortest v0.135.0
 	go.opentelemetry.io/collector/pdata v1.41.0
 	// Same Kubernetes versions as collector-contrib 0.135's k8sattributes processor.
 	k8s.io/api v0.32.3
@@ -96,7 +113,6 @@ require (
 	github.com/shurcooL/vfsgen v0.0.0-20230704071429-0000e147ea92 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/collector/featuregate v1.41.0 // indirect
 	go.opentelemetry.io/collector/semconv v0.128.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
