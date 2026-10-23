@@ -50,6 +50,7 @@ The story: staging runs single-container pods; a PR adds a sidecar and is caught
   - `derived`: the node produced a new signal from its inputs
   - `dropped`: the input contributed to no output
   - `routed`: an alert reached a receiver
+- **Backend outputs**: data series first (`p1`, `p2`, ...), then one `target_info` series per resource, as Mimir's OTLP translator writes it. Its labels are `job` plus every non-identifying resource attribute.
 - **`summary`**: per requirement and pod: `status`, `path` (signal ids), and `receiver` or `broken_at`. Status is `covered`, `not_covered`, or `covered_simulated` when the path needs an attribute only sdk-env provided; `simulated_by` then lists those events. Attributes simulated but not needed (like `k8s.pod.uid` in 04) don't count.
 - **`diagnosis`**: per gap, the `chain` of events from where the path broke back to the `root_cause`.
 
@@ -84,3 +85,7 @@ otelcol-contrib validate --config=collector/collector.yaml
 - **Env resolution:** literal values, `valueFrom.fieldRef` (pod fields) and `$(VAR)` references to earlier env vars. Other sources (`configMapKeyRef`, `secretKeyRef`, `envFrom`) give `unverified`.
 - **Diff:** undo the snapshot's env attributes, apply the config's. An attribute is only removed if its recorded value matches what the snapshot's env var said, since apps can also set attributes in code.
 - **Consistency check:** if the recording disagrees with the snapshot's env vars, the snapshot metadata is wrong; flag it.
+
+## Changes to the golden reports
+
+- **Backend node built** with Prometheus's real OTLP translator: added the `target_info` series it emits (labels derived from the golden data itself, then confirmed against the translator), and dropped the hand-written `metric.why` explanation from backend `derived` details. Event IDs renumbered accordingly.

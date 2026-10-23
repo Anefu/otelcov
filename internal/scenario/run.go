@@ -11,6 +11,7 @@ import (
 	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/nodes/k8sattributes"
+	"github.com/Anefu/otelcov/internal/nodes/mimir"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
 	"github.com/Anefu/otelcov/internal/unit"
@@ -28,7 +29,7 @@ type Result struct {
 }
 
 // Run executes the scenario's graph as far as it is implemented: replay,
-// sdk-env, then the collector pipeline's processors.
+// sdk-env, the collector pipeline's processors, then the backend.
 func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	snap, err := LoadSnapshot(s.Data.Snapshot)
 	if err != nil {
@@ -51,10 +52,16 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		return nil, fmt.Errorf("collector: %w", err)
 	}
 
+	limits, err := mimir.Load(s.Config.Backend)
+	if err != nil {
+		return nil, fmt.Errorf("backend: %w", err)
+	}
+
 	nodes := []graph.MetricsNode{sdkenv.New(snapPods, pods)}
 	for _, id := range pipeline.Processors {
 		nodes = append(nodes, processorNode(collectorPrefix+"/"+id, id, col.Processors[id], pods))
 	}
+	nodes = append(nodes, mimir.New(limits))
 
 	log := lineage.NewLog()
 	src := source.New(s.Data.Recording, s.Rel(s.Data.Recording))
