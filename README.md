@@ -60,7 +60,7 @@ $ go run ./cmd/otelcov scenario testdata/agent-gateway/scenarios/02-team-conditi
 
 The topology file is checked on every run: an exporter sending to the wrong port, a receiver listening on localhost only, or an exporter that isn't connected to anything is reported, and coverage through it is marked `unverified` or the run stops.
 
-`-json` prints the full report, with every signal and lineage event. The exit status is 1 when anything is not covered, so it can gate CI.
+`-json` prints the full report, with every signal and lineage event. `-html report.html` writes one self-contained page for all the scenarios: a coverage matrix, and for any pod its route through the stack, with what each node did to its signal and where the route breaks. The exit status is 1 when anything is not covered, so it can gate CI.
 
 ## Try it on a cluster
 

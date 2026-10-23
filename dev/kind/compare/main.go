@@ -10,7 +10,10 @@
 // prediction for a config the cluster isn't running. Deploy it (tilt args) and
 // wait for old series to go stale (~5 minutes) to check it.
 //
-//	compare [-mimir URL] [-alertmanager URL] captured/scenarios/*.yaml
+//	compare [-mimir URL] [-alertmanager URL] [-html page.html] captured/scenarios/*.yaml
+//
+// With -html it also writes otelcov's report page for every scenario, with the
+// real stack's answer next to otelcov's for the scenarios it compared.
 package main
 
 import (
@@ -29,6 +32,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Anefu/otelcov/internal/htmlreport"
 	"github.com/Anefu/otelcov/internal/report"
 	"github.com/Anefu/otelcov/internal/requirements"
 	"github.com/Anefu/otelcov/internal/scenario"
@@ -51,12 +55,17 @@ func main() {
 	flag.StringVar(&o.context, "context", "kind-otelcov", "kubectl context, to read the deployed configs")
 	flag.StringVar(&o.podLabel, "pod-label", "k8s_pod_name", "label that carries the pod name on series and alerts")
 	flag.StringVar(&o.namespaceLabel, "namespace-label", "k8s_namespace_name", "label that carries the namespace")
+	htmlOut := flag.String("html", "", "also write the report page, with the real stack's answers, to this file")
 	flag.Parse()
 	if flag.NArg() == 0 {
 		fmt.Fprintln(os.Stderr, "usage: compare [flags] scenario.yaml...")
 		os.Exit(2)
 	}
-	disagree, err := run(context.Background(), o, flag.Args(), os.Stdout)
+	page := &htmlreport.Data{Generated: time.Now().UTC().Format(time.RFC3339)}
+	disagree, err := run(context.Background(), o, flag.Args(), os.Stdout, page)
+	if err == nil && *htmlOut != "" {
+		err = writePage(*htmlOut, *page)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "compare:", err)
 		os.Exit(2)
@@ -74,7 +83,21 @@ type options struct {
 	podExists     func(ctx context.Context, namespace, name string) (bool, error)
 }
 
-func run(ctx context.Context, o options, paths []string, w io.Writer) (bool, error) {
+func writePage(path string, d htmlreport.Data) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := htmlreport.Write(f, d); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// run compares each scenario that is deployed, printing a table per scenario,
+// and fills page (if not nil) with every scenario's report and truth.
+func run(ctx context.Context, o options, paths []string, w io.Writer, page *htmlreport.Data) (bool, error) {
 	if o.configMapData == nil {
 		o.configMapData = o.kubectlConfigMap
 	}
@@ -87,18 +110,30 @@ func run(ctx context.Context, o options, paths []string, w io.Writer) (bool, err
 		if err != nil {
 			return false, err
 		}
-		if why, err := notDeployed(ctx, o, s); err != nil {
-			return false, err
-		} else if why != "" {
-			fmt.Fprintf(w, "%s: skipped, not what's deployed (%s)\n\n", s.Name, why)
-			continue
-		}
-		compared++
-		d, err := compare(ctx, o, s, w)
+		rep, flow, err := scenario.ReportWithFlow(ctx, s)
 		if err != nil {
 			return false, fmt.Errorf("%s: %w", s.Name, err)
 		}
-		disagree = disagree || d
+		sc := htmlreport.Scenario{Report: rep, Flow: flow}
+		why, err := notDeployed(ctx, o, s)
+		if err != nil {
+			return false, err
+		}
+		if why != "" {
+			fmt.Fprintf(w, "%s: skipped, not what's deployed (%s)\n\n", s.Name, why)
+			sc.NotCompared = "not what's deployed (" + why + ")"
+		} else {
+			compared++
+			d, truths, err := compare(ctx, o, s, rep, w)
+			if err != nil {
+				return false, fmt.Errorf("%s: %w", s.Name, err)
+			}
+			disagree = disagree || d
+			sc.Truth = truths
+		}
+		if page != nil {
+			page.Scenarios = append(page.Scenarios, sc)
+		}
 	}
 	if compared == 0 {
 		fmt.Fprintln(w, "No scenario matches the deployed configs. Capture again after deploying.")
@@ -160,15 +195,12 @@ type truth struct {
 	receivers []string // where Alertmanager routed the alert
 }
 
-func compare(ctx context.Context, o options, s *scenario.Scenario, w io.Writer) (bool, error) {
-	rep, err := scenario.Report(ctx, s)
-	if err != nil {
-		return false, err
-	}
+func compare(ctx context.Context, o options, s *scenario.Scenario, rep *report.Report, w io.Writer) (bool, map[string]htmlreport.Truth, error) {
 	reqs, err := requirements.Load(s.Requirements)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
+	truths := map[string]htmlreport.Truth{}
 	byID := map[string]requirements.Requirement{}
 	for _, r := range reqs {
 		byID[r.ID] = r
@@ -183,17 +215,18 @@ func compare(ctx context.Context, o options, s *scenario.Scenario, w io.Writer) 
 		ns, pod, _ := strings.Cut(e.Pod, "/")
 		t, err := o.lookup(ctx, ns, pod, req.MustReach.Alert)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		v := verdict(e.Status, t, req.MustReach.Receiver)
+		truths[htmlreport.TruthKey(e.Requirement, e.Pod)] = htmlreport.Truth{Real: t.String(), Verdict: v}
 		disagree = disagree || strings.HasPrefix(v, "DISAGREE")
 		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", e.Pod, e.Status, t, v)
 	}
 	if err := tw.Flush(); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	fmt.Fprintln(w)
-	return disagree, nil
+	return disagree, truths, nil
 }
 
 func (t truth) String() string {

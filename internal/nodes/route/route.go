@@ -128,3 +128,12 @@ func inhibitTargets(ir amconfig.InhibitRule, lset model.LabelSet) bool {
 	}
 	return true
 }
+
+// Receivers returns the receivers' names, in config order.
+func (n *Node) Receivers() []string {
+	var out []string
+	for _, rc := range n.cfg.Receivers {
+		out = append(out, rc.Name)
+	}
+	return out
+}

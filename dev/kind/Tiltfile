@@ -123,12 +123,20 @@ local_resource('capture', cmd='./capture.sh',
 
 # 2. Run every scenario on the capture. Exit status 1 (something not covered)
 #    is an answer, not a failure.
-local_resource('otelcov', cmd='bin/otelcov scenario captured/scenarios/*.yaml; test $? -le 1',
+local_resource('otelcov', cmd='bin/otelcov scenario -html captured/report.html captured/scenarios/*.yaml; test $? -le 1',
     auto_init=False, trigger_mode=TRIGGER_MODE_MANUAL,
     resource_deps=['otelcov-build'], labels=['otelcov'])
 
 # 3. Check otelcov's answers against Mimir and Alertmanager, for the scenarios
 #    whose configs are deployed right now.
-local_resource('compare', cmd='bin/compare captured/scenarios/*.yaml',
+local_resource('compare', cmd='bin/compare -html captured/compare.html captured/scenarios/*.yaml',
     auto_init=False, trigger_mode=TRIGGER_MODE_MANUAL,
     resource_deps=['otelcov-build', 'mimir', 'alertmanager'], labels=['otelcov'])
+
+# The report pages that otelcov and compare write, served from captured/.
+local_resource('reports', serve_cmd='mkdir -p captured && exec python3 -m http.server 9010 --bind 127.0.0.1 --directory captured',
+    labels=['otelcov'],
+    links=[
+        link('http://localhost:9010/report.html', 'otelcov report'),
+        link('http://localhost:9010/compare.html', 'real vs predicted'),
+    ])

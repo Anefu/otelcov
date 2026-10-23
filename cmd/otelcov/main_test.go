@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,6 +39,15 @@ func TestScenarioCommand(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
+	}
+
+	page := filepath.Join(t.TempDir(), "report.html")
+	out.Reset()
+	if code := run([]string{"scenario", "-html", page, "../../testdata/agent-gateway/scenarios/01-baseline.yaml"}, &out, &errs); code != 0 {
+		t.Fatalf("exit %d, want 0; stderr: %s", code, errs.String())
+	}
+	if b, err := os.ReadFile(page); err != nil || !strings.Contains(string(b), `"scenario":"01-baseline"`) {
+		t.Errorf("report page: %v", err)
 	}
 
 	if code := run([]string{"bogus"}, &out, &errs); code != 2 {

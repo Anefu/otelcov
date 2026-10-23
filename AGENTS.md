@@ -208,7 +208,9 @@ Other deployment patterns and backends come later, as adapters.
 - **Pods** (`internal/kube.LoadPods`) decode like the API server (`sigs.k8s.io/json`). Fields the 1.32 API types don't know, e.g. from a newer cluster, are ignored and reported as a `warning` problem; fixtures must have none (`TestFixturesHaveNoUnknownFields`).
 - **Golden tests** (`internal/scenario/golden_test.go`) run every scenario in `testdata/thin-slice` and `testdata/agent-gateway` and compare whole reports exactly, event IDs and topology problems included. To change a golden report deliberately: `go test ./internal/scenario -update`, then review the diff and note why in that fixture directory's README.
 - **Report** (`internal/report`): see Lineage and reports.
-- **CLI** (`cmd/otelcov`): `otelcov scenario [-root dir] [-json] scenario.yaml...`; exit status 1 if anything is not covered, 2 on errors.
+- **Flow graph** (`internal/flowgraph`, built by `topology.Flow` and `scenario.Run`): the scenario's components in flow order, with lineage node names as IDs (source, sdk-env, each modeled pipeline's processors and exporters following joins, backends, recording rules and alerts with their inputs, Alertmanager routes, receivers). Bad joins carry validation's reason on their edge. `scenario.ReportWithFlow` returns it with the report.
+- **Report page** (`internal/htmlreport`, decision 49): `page.html` holds the styles and script; data is embedded as JSON (html/template escapes it, so config text can't end the script). The page shows the coverage matrix (scenarios as columns, real-stack verdicts when compare ran) and, for the selected cell, a strip map: one row per flow node, grouped by part of the stack, the route as a line that stops where it breaks, the root cause ringed, the pod's events beside each node, and event counts for all signals. Data is always rendered as text, never as HTML.
+- **CLI** (`cmd/otelcov`): `otelcov scenario [-root dir] [-json] [-html page.html] scenario.yaml...`; exit status 1 if anything is not covered, 2 on errors.
 
 ### Snapshot metadata
 
@@ -297,6 +299,7 @@ Other deployment patterns and backends come later, as adapters.
 | 46 | Coverage ignores values: rules (recording and alerting) are rewritten so comparisons become `bool` and `topk`/`bottomk`/`limitk`/`limit_ratio` pass their input through, then evaluated with the real engine; `for` is treated as met | Strip comparisons and evaluate the left side; explainer only | Owner's point: thresholds don't change *whether* a series is watched, only labels and matching do. The rewrite keeps the real engine as the check on the explainer. Whether thresholds are *realistic* (units, impossible values) is a separate, later check |
 | 47 | Next after the thin slice: agent + gateway topology support, and real collector-contrib processor nodes with OTTL statement explanations; then test against a kind cluster running that topology | Stepped time; Loki/LogQL; dashboards | The owner's stack is agents + gateway, and the processors are where coverage silently breaks |
 | 48 | kind lab (`dev/kind`, Tilt): collectors as plain manifests; Mimir + Alertmanager + a webhook sink as ground truth to compare otelcov's answers with; a small Python OTel SDK app as the vLLM stand-in; resourcedetection values captured by a second agent pipeline after it | OTel Helm chart or Operator; collectors only (no ground truth) or Mimir only; telemetrygen or real vLLM on CPU; deriving detections in the capture script | otelcov reads the same files that are deployed; real firing alerts check the predictions; full control over metric names and temporality; detection values come from the real processor |
+| 49 | Report UI: one static, self-contained HTML page (`otelcov scenario -html`, and `compare -html` in the lab) showing a coverage matrix across scenarios, each pod's route (lineage) on the pipeline graph, and real vs predicted; no build step (Go `html/template`, plain JavaScript, data embedded as JSON) | A local web server (`otelcov serve`); both; a React app with a build step | Opens anywhere, works as a CI/PR artifact, nothing new to install |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
@@ -328,6 +331,11 @@ Chosen while building the kind lab (decision 48):
 - **kind-only settings**: the alert threshold is `> 0` with `for: 1m`, the rule interval is 30s, and Alertmanager waits are short, so the real stack answers within minutes.
 - **Apps what-ifs in the lab** (`dev/kind/snapshot/whatif.go`): a manifest's Deployment templates are applied to the captured pods they own (ReplicaSet `<deployment>-<pod-template-hash>`). Only container env/envFrom and pod labels change; a template with a different set of containers is refused. This is a first, lab-only answer to the open question on PR what-ifs for Deployment templates.
 - **compare and replaced pods**: a pod that no longer exists gives `n/a` (capture again). A pod that exists but has no series in Mimir is a disagreement when otelcov said covered.
+
+Chosen while building the report page (decision 49):
+
+- **Design**: one plane separated by rules, Atkinson Hyperlegible Next and Mono (loaded from Google Fonts, with system fallbacks offline; contextual alternates off so IDs render as typed), status colors always paired with words, light and dark. The route is drawn as a strip map rather than a free-form graph, because the flow is mostly a chain; side branches (e.g. copies to `debug`) get an elbow.
+- **What the route shows**: the requirement's path signals plus copies made from them. A node is on the route if the signal acted there or it lies between such nodes, so pass-through processors appear hollow. The page opens on the URL's `#scenario|requirement|pod`, else the first result that isn't covered.
 - **Report schema details**: signal ID prefixes (`s`, `p`, `r`, `a`), field names, the `covered_simulated` status.
 - **Repository layout**: fixtures in `testdata/` (Go convention).
 
@@ -453,6 +461,8 @@ internal/ruleeval         one expression for coverage: rewrite, engine, explaine
 internal/alerting         the Alert type
 internal/requirements     coverage requirements (OTel terms)
 internal/report           summary, diagnosis
+internal/flowgraph        a scenario's components and how they connect, for the report page
+internal/htmlreport       the self-contained report page (page.html)
 internal/scenario         scenario loading, runs, golden tests
 internal/nodes/...        one package per node; nodetest has test helpers
 internal/nodes/realproc   real collector-contrib processors, OTTL statement and condition explanations

@@ -148,7 +148,7 @@ func (r *Runner) flow(ctx context.Context, coll string, receivers map[string]boo
 
 func (r *Runner) export(ctx context.Context, coll, exp string, items []unit.Metric, depth int) error {
 	key := coll + "/exporters/" + exp
-	node := coll + "/" + exp
+	node := exporterName(coll, exp)
 	for _, e := range r.f.External {
 		if e == key {
 			return r.record(node, eachEvent(items, lineage.Event{Node: node, Action: lineage.Exported,
@@ -185,25 +185,38 @@ func (r *Runner) pipelineNodes(ctx context.Context, coll, pid string) ([]graph.M
 		return n, nil
 	}
 	cfg := r.configs[coll]
-	shared := map[string]int{}
-	for p, pl := range cfg.Service.Pipelines {
-		if IsMetrics(p) && !r.f.Collectors[coll].Recording(p) {
-			for _, id := range pl.Processors {
-				shared[id]++
-			}
-		}
-	}
 	var nodes []graph.MetricsNode
 	for _, id := range cfg.Service.Pipelines[pid].Processors {
-		name := coll + "/" + id
-		if shared[id] > 1 {
-			name = coll + "/" + pid + "/" + id
-		}
+		name := processorName(cfg, r.f.Collectors[coll], coll, pid, id)
 		nodes = append(nodes, r.processorNode(ctx, coll, name, id, cfg.Processors[id]))
 	}
 	r.nodes[key] = nodes
 	return nodes, nil
 }
+
+// processorName is a processor's node name in lineage:
+// "<collector>/<processor id>", or "<collector>/<pipeline>/<processor id>" when
+// several modeled pipelines of the collector use the processor.
+func processorName(cfg *collector.Config, c Collector, coll, pid, id string) string {
+	uses := 0
+	for p, pl := range cfg.Service.Pipelines {
+		if !IsMetrics(p) || c.Recording(p) {
+			continue
+		}
+		for _, x := range pl.Processors {
+			if x == id {
+				uses++
+			}
+		}
+	}
+	if uses > 1 {
+		return coll + "/" + pid + "/" + id
+	}
+	return coll + "/" + id
+}
+
+// exporterName is an exporter's node name in lineage.
+func exporterName(coll, exp string) string { return coll + "/" + exp }
 
 func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw map[string]any) graph.MetricsNode {
 	switch typ := collector.Type(id); {
