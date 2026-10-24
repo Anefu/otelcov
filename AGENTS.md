@@ -303,6 +303,7 @@ Other deployment patterns and backends come later, as adapters.
 | 48 | kind lab (`dev/kind`, Tilt): collectors as plain manifests; Mimir + Alertmanager + a webhook sink as ground truth to compare otelcov's answers with; a small Python OTel SDK app as the vLLM stand-in; resourcedetection values captured by a second agent pipeline after it | OTel Helm chart or Operator; collectors only (no ground truth) or Mimir only; telemetrygen or real vLLM on CPU; deriving detections in the capture script | otelcov reads the same files that are deployed; real firing alerts check the predictions; full control over metric names and temporality; detection values come from the real processor |
 | 49 | Report UI: one static, self-contained HTML page (`otelcov scenario -html`, and `compare -html` in the lab) showing a coverage matrix across scenarios, each pod's route (lineage) on the pipeline graph, and real vs predicted; no build step (Go `html/template`, plain JavaScript, data embedded as JSON) | A local web server (`otelcov serve`); both; a React app with a build step | Opens anywhere, works as a CI/PR artifact, nothing new to install |
 | 50 | The report page embeds only what it shows: route signals and their copies, their events, the events the summary and diagnosis cite, and per-node event counts for the whole run | A shorter capture window in the lab; both | A real recording has an event per data point per node (30 MB for two hours of the kind lab); routes need a few dozen. The lab's capture stays as it is |
+| 51 | The k8sattributes model is held to upstream's own tests for feature parity: the cases in collector-contrib's `processor/k8sattributesprocessor/processor_test.go` and `internal/kube/client_test.go` at the pinned version. How they're brought in and kept in sync is open (see Open questions) | Hand-written cases only (as so far) | The model is hand-written (decision 19), and checking it against the 0.134 source found a divergence the hand-written tests missed (see Known gaps). Contrib is Apache-2.0 like otelcov, so its tests can be copied with attribution; the AGPL clean room doesn't apply |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
@@ -352,7 +353,17 @@ Chosen while building the report page (decision 49):
 - **More stacks**: plain Prometheus (OTLP receiver, remote write), other backends and consumers, other collector deployment patterns (sidecars, load-balancing exporter, queues like Kafka between collectors).
 - **OTel Weaver live-check** as a possible source-side node (does the app emit what its schema says?).
 
+## Known gaps
+
+- **k8sattributes and init containers** (found 2026-10-24 by reading contrib 0.134's `processor.go` and `internal/kube/client.go`): the real processor falls back to "the pod's only container" by counting containers from `status.containerStatuses` **plus `status.initContainerStatuses`** (and spec containers plus init containers). otelcov's `identifyContainer` counts `spec.containers` only. So for a pod with one app container and one init container (e.g. `istio-init`, a wait-for-db step, a native sidecar), the real processor doesn't set `k8s.container.name` but otelcov does, and can report the pod **covered when it isn't**. The kind lab didn't catch it: its pods have no init containers. To fix together with decision 51.
+- **Smaller k8sattributes differences** from the same reading: the real processor strips the `containerd://`-style prefix from pod status container IDs only, not from the resource's `container.id` (otelcov strips both); and it overwrites an attribute that is present but empty (otelcov keeps it).
+
 ## Open questions
+
+- **Bringing upstream k8sattributes tests in and keeping them in sync** (decision 51). Upstream tests come in two layers: `processor_test.go` feeds the processor pre-built cache entries (`kube.Pod{Containers: ByName/ByID}`), and `internal/kube/client_test.go` checks how a Kubernetes pod becomes those entries. otelcov's model goes from a pod straight to attributes, so each case has to be translated, and Go can't import another module's `_test.go` files or `internal/` packages, so the tests can't be called directly. Options:
+  - **Port with provenance, plus a drift check**: each case keeps the upstream file, test and case name and the version; a test reads the upstream test files from the Go module cache at the pinned version (module downloads include `_test.go` files) and fails when their hash differs from the one recorded at the last port, naming the changed tests, so a version bump forces a re-port.
+  - **Reference the upstream files directly**: no copies; our tests point at upstream cases by name and the module-cache files are the source of truth. Still needs each case translated in code, so in practice it's the drift check without the copies.
+  - **Differential testing against the real processor**: run the real k8sattributes processor too (it needs a Kubernetes API, e.g. a fake API server serving the pods) on the same inputs, including every upstream case, and compare outputs. The real code is the oracle and stays in sync with the pin by itself; the most work.
 
 - **PR what-ifs on Deployment templates**: fixtures keep pod names and IPs stable. A real PR changes a template, so the checker must map recorded pods to their owner and apply the new template.
 - **LogQL evaluation**: when and how to evaluate line filters and parsers (`|= "error"`, `| json`); until then they're `unverified`.
@@ -366,7 +377,7 @@ Chosen while building the report page (decision 49):
 
 ## Gotchas and facts worth knowing
 
-- **k8sattributes**: container-level attributes need the pod to have one container, or `container.id` / `k8s.container.name` on the incoming resource. Assumed (verify in tests): it doesn't overwrite attributes already present.
+- **k8sattributes**: container-level attributes need `k8s.container.name` or `container.id` on the incoming resource, or a pod with one container, counting init containers (see Known gaps). Checked against contrib 0.134's source: it doesn't overwrite attributes already present, unless their value is empty.
 - **Prometheus/Mimir OTLP ingestion**: only promoted resource attributes become labels (Mimir: `promote_otel_resource_attributes`, comma-separated string); the rest go to `target_info`. Dots become underscores; `service.name` becomes `job`.
 - **Unverified**: the Mimir setting name `otel_metric_suffixes_enabled` (adds unit/type suffixes, e.g. `process_memory_usage_bytes`). Check against the deployed Mimir version.
 - **Loki OTLP ingestion**: some resource attributes become stream labels, the rest structured metadata. A stream selector on a structured-metadata attribute matches nothing.
