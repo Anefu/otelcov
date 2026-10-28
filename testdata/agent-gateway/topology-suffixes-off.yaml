@@ -1,0 +1,32 @@
+# Scenario 05: as deployed, but Mimir's otel_metric_suffixes_enabled is off,
+# so process.memory.usage arrives as process_memory_usage.
+version: 1
+collectors:
+  agent:
+    config: collector/agent.yaml
+    sha256: 27abbac8569f972634861cbb73bde6e3be5f8fdad32bd2f89079fa643aeaaed7
+    tap: metrics/tap
+  gateway:
+    config: collector/gateway.yaml
+    sha256: 3c602d561092fa2cae242e8074e1370e36ef10c74745206a9e2554ca52d35ddb
+backends:
+  mimir:
+    type: mimir-otlp
+    config: backend/mimir-suffixes-off.yaml
+    sha256: a09276d06566efd9191387a573313e0987ff2622d48e8b8ff024099182b1cfd0
+consumers:
+  rules:
+    type: prometheus-rules
+    paths: [rules/inference.rules.yaml]
+    reads: mimir
+  alertmanager:
+    type: alertmanager
+    config: alertmanager/alertmanager.yaml
+    reads: rules
+external:
+  - gateway/exporters/debug
+joins:
+  - from: agent/exporters/otlp/gateway
+    to: gateway/receivers/otlp
+  - from: gateway/exporters/otlphttp/mimir
+    to: mimir

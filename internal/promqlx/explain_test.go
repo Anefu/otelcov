@@ -201,3 +201,68 @@ func TestStructural(t *testing.T) {
 		t.Errorf("want all 3 up series (one is 0), got %d", len(vec))
 	}
 }
+
+func TestNameVariant(t *testing.T) {
+	for _, tc := range []struct {
+		want, got  string
+		ok         bool
+		wantSuffix string
+		gotSuffix  string
+	}{
+		// Suffixes off, on, and UTF-8 names.
+		{"process_memory_usage_bytes", "process_memory_usage", true, "bytes", ""},
+		{"process_memory_usage", "process_memory_usage_bytes", true, "", "bytes"},
+		{"process_memory_usage_bytes", "process.memory.usage", true, "bytes", ""},
+		{"process_memory_usage", "process.memory.usage", true, "", ""},
+		{"http_requests_total", "http_requests", true, "total", ""},
+		{"net_io_bytes_per_second_total", "net_io", true, "bytes_per_second_total", ""},
+		{"cpu_utilization_ratio", "cpu_utilization", true, "ratio", ""},
+		// Another unit.
+		{"process_memory_usage_bytes", "process_memory_usage_mebibytes", true, "bytes", "mebibytes"},
+		// Histogram series must be the same kind.
+		{"http_server_duration_seconds_bucket", "http_server_duration_bucket", true, "seconds", ""},
+		{"http_server_duration_seconds_count", "http_server_duration_seconds_sum", false, "", ""},
+		{"http_server_duration_seconds_count", "http_server_duration_seconds", false, "", ""},
+		// Other words are other metrics.
+		{"process_memory_usage_bytes", "process_memory_limit_bytes", false, "", ""},
+		{"http_requests_total", "http_requests_errors_total", false, "", ""},
+		{"bytes", "bytes_total", true, "", "total"},
+		{"up", "up", false, "", ""},
+	} {
+		miss, ok := nameVariant(tc.want, tc.got)
+		if ok != tc.ok {
+			t.Errorf("nameVariant(%q, %q) = %v, want %v", tc.want, tc.got, ok, tc.ok)
+			continue
+		}
+		if ok && (miss.WantSuffix != tc.wantSuffix || miss.GotSuffix != tc.gotSuffix) {
+			t.Errorf("nameVariant(%q, %q) suffixes = %q, %q, want %q, %q", tc.want, tc.got, miss.WantSuffix, miss.GotSuffix, tc.wantSuffix, tc.gotSuffix)
+		}
+	}
+}
+
+// A series under another name for the selector's metric is a near miss on
+// __name__; unrelated series aren't.
+func TestNameVariantDrops(t *testing.T) {
+	lsets := []labels.Labels{
+		labels.FromStrings("__name__", "process_memory_usage", "job", "vllm"),
+		labels.FromStrings("__name__", "process_cpu_time_seconds_total", "job", "vllm"),
+		labels.FromStrings("__name__", "process_memory_usage_bytes", "job", "vllm"),
+	}
+	ex, err := Explain(mustParse(t, `max by (job) (process_memory_usage_bytes{job="vllm"})`), lsets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex.Drops) != 1 {
+		t.Fatalf("want one drop, got %+v", ex.Drops)
+	}
+	d := ex.Drops[0]
+	if d.Input != 0 || d.Label != "__name__" || d.Matcher != `__name__="process_memory_usage_bytes"` || d.Name == nil || d.Name.WantSuffix != "bytes" ||
+		d.Reason != `the selector wants metric "process_memory_usage_bytes"; this series is named "process_memory_usage", the same name without the "_bytes" suffix` {
+		t.Errorf("drop = %+v", d)
+	}
+	// A regex name matcher says nothing about variants.
+	ex, _ = Explain(mustParse(t, `{__name__=~"process_memory_usage_bytes"}`), lsets)
+	if len(ex.Drops) != 0 {
+		t.Errorf("regex name matchers give no name drops: %+v", ex.Drops)
+	}
+}

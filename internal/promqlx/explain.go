@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -28,6 +29,18 @@ type Drop struct {
 	// Matcher is the selector matcher that failed, for selector drops.
 	Matcher string
 	Reason  string
+	// Name is set when the series has another name for the selector's
+	// metric (Label is then __name__).
+	Name *NameMiss
+}
+
+// NameMiss is a series whose name is the selector's metric name written
+// differently: the same words apart from translation suffixes and
+// separators. Suffixes are written as in names, without the leading
+// underscore ("bytes", "bytes_total"), "" for none.
+type NameMiss struct {
+	Want, Got             string
+	WantSuffix, GotSuffix string
 }
 
 // Explanation is the result of Explain.
@@ -121,7 +134,8 @@ func (x *explainer) walk(e parser.Expr) (flow, error) {
 
 // selector keeps inputs that match every matcher, and records near misses:
 // series with the selector's metric name (or, without one, failing a single
-// matcher) that a matcher rejects.
+// matcher) that a matcher rejects, and series whose name is a variant of the
+// selector's metric name (see nameVariant).
 func (x *explainer) selector(vs *parser.VectorSelector) flow {
 	var nameM *labels.Matcher
 	for _, m := range vs.LabelMatchers {
@@ -141,7 +155,17 @@ func (x *explainer) selector(vs *parser.VectorSelector) flow {
 			f.items = append(f.items, item{lset: ls, parents: []int{i}})
 			continue
 		}
-		nearMiss := (nameM != nil && nameM.Matches(ls.Get(labels.MetricName))) || (nameM == nil && len(failed) == 1)
+		name := ls.Get(labels.MetricName)
+		if nameM != nil && nameM.Type == labels.MatchEqual && !nameM.Matches(name) {
+			// The name is the first thing to fix; other matchers aren't
+			// checked against a series the selector doesn't name.
+			if miss, ok := nameVariant(nameM.Value, name); ok {
+				x.drop(Drop{Input: i, Label: labels.MetricName, Clause: "selector", Matcher: nameM.String(), Name: miss,
+					Reason: fmt.Sprintf("the selector wants metric %q; this series is named %q, the same name %s", miss.Want, miss.Got, miss.difference())})
+			}
+			continue
+		}
+		nearMiss := (nameM != nil && nameM.Matches(name)) || (nameM == nil && len(failed) == 1)
 		if !nearMiss {
 			continue
 		}
@@ -154,6 +178,79 @@ func (x *explainer) selector(vs *parser.VectorSelector) flow {
 		}
 	}
 	return f
+}
+
+// Words Prometheus's OTLP translation appends to metric names (the
+// otlptranslator package's unit maps): unit suffixes, "per <unit>", "total"
+// for counters, "ratio" for unit 1 gauges. Units outside the maps are
+// appended as written and can't be recognized.
+var (
+	unitWords = map[string]bool{
+		"days": true, "hours": true, "minutes": true, "seconds": true, "milliseconds": true, "microseconds": true, "nanoseconds": true,
+		"bytes": true, "kibibytes": true, "mebibytes": true, "gibibytes": true, "tibibytes": true,
+		"kilobytes": true, "megabytes": true, "gigabytes": true, "terabytes": true,
+		"meters": true, "volts": true, "amperes": true, "joules": true, "watts": true, "grams": true,
+		"celsius": true, "hertz": true, "percent": true,
+	}
+	perWords = map[string]bool{"second": true, "minute": true, "hour": true, "day": true, "week": true, "month": true, "year": true}
+	// Series a histogram or summary becomes; they must agree.
+	seriesKinds = map[string]bool{"bucket": true, "count": true, "sum": true}
+)
+
+// stem splits a metric name into its words, apart from the translation
+// suffix, and the series kind (bucket, count, sum) if any. Any character
+// other than a letter or digit separates words, so an OpenTelemetry name
+// (process.memory.usage) and its Prometheus form (process_memory_usage)
+// have the same words.
+func stem(name string) (base []string, kind string, suffix []string) {
+	words := strings.FieldsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	i := len(words)
+	if i > 1 && seriesKinds[words[i-1]] {
+		kind = words[i-1]
+		i--
+	}
+	end := i
+	if i > 1 && words[i-1] == "total" {
+		i--
+	}
+	if i > 1 && words[i-1] == "ratio" {
+		i--
+	}
+	if i > 2 && words[i-2] == "per" && perWords[words[i-1]] {
+		i -= 2
+	}
+	if i > 1 && unitWords[words[i-1]] {
+		i--
+	}
+	return words[:i], kind, words[i:end]
+}
+
+// nameVariant reports whether got is the metric name want written
+// differently: the same words and series kind, with other translation
+// suffixes or other separators. That is how one OpenTelemetry metric is
+// named under different translation settings (suffixes on or off, UTF-8
+// names) or with another unit.
+func nameVariant(want, got string) (*NameMiss, bool) {
+	wb, wk, ws := stem(want)
+	gb, gk, gs := stem(got)
+	if want == got || wk != gk || len(wb) == 0 || strings.Join(wb, " ") != strings.Join(gb, " ") {
+		return nil, false
+	}
+	return &NameMiss{Want: want, Got: got, WantSuffix: strings.Join(ws, "_"), GotSuffix: strings.Join(gs, "_")}, true
+}
+
+// difference says how the names differ, for reasons: "without the `_bytes`
+// suffix".
+func (m *NameMiss) difference() string {
+	switch {
+	case m.WantSuffix == m.GotSuffix:
+		return "with other separators"
+	case m.GotSuffix == "":
+		return fmt.Sprintf("without the %q suffix", "_"+m.WantSuffix)
+	case m.WantSuffix == "":
+		return fmt.Sprintf("with a %q suffix", "_"+m.GotSuffix)
+	}
+	return fmt.Sprintf("with the suffix %q instead of %q", "_"+m.GotSuffix, "_"+m.WantSuffix)
 }
 
 func (x *explainer) aggregate(a *parser.AggregateExpr) (flow, error) {

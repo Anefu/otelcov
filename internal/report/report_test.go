@@ -169,3 +169,50 @@ func TestDestinations(t *testing.T) {
 		}
 	})
 }
+
+// A series reaching the alert under another name for its metric: the
+// diagnosis goes from the selector to Mimir's translation to the processor
+// that removed the metric's unit.
+func TestRenamedMetricDiagnosis(t *testing.T) {
+	log := lineage.NewLog()
+	for _, s := range []lineage.Signal{
+		{ID: "s1", Node: "source/otlp-replay", Kind: "otlp_metric", Name: "m"},
+		{ID: "p1", Node: "backend/mimir-otlp", Kind: "series", From: []lineage.SignalID{"s1"}, Labels: map[string]string{"__name__": "m"}},
+	} {
+		if err := log.AddSignal(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := log.Record(
+		lineage.Event{Node: "source/sdk-env", Signal: "s1", Action: lineage.Attributed, Detail: map[string]any{"pod": "ns/p", "container": "app"}},
+		lineage.Event{Node: "gateway/transform/units", Signal: "s1", Attribute: "metric.unit", Action: lineage.Set, Value: "",
+			Reason: "set by metric statement `set(metric.unit, \"\")`", Detail: map[string]any{"level": "metric", "was": "By"}},
+		lineage.Event{Node: "backend/mimir-otlp", Signal: "p1", Action: lineage.Derived, From: []lineage.SignalID{"s1"},
+			Detail: map[string]any{"metric": map[string]any{"from": "m", "to": "m"}}},
+		lineage.Event{Node: "alert/A", Signal: "p1", Attribute: "__name__", Action: lineage.Dropped,
+			Detail: map[string]any{
+				"requires":    map[string]any{"label": "__name__", "matcher": `__name__="m_bytes"`, "clause": "selector"},
+				"metric_name": map[string]any{"want": "m_bytes", "got": "m", "want_suffix": "bytes", "got_suffix": ""},
+			}},
+	)
+	r := Build("x", "", log, []requirements.Requirement{req()}, pods("p"))
+	if e := r.Summary[0]; e.Status != NotCovered || e.BrokenAt != "alert/A" {
+		t.Fatalf("%+v", e)
+	}
+	d := r.Diagnosis[0]
+	if strings.Join(d.Chain, ",") != ids[3]+","+ids[2]+","+ids[1] || d.RootCause != ids[1] {
+		t.Errorf("chain %v, root %s", d.Chain, d.RootCause)
+	}
+	for _, want := range []string{
+		"Alert `A` selects metric `m_bytes`, but this pod's series is named `m`",
+		"Mimir keeps the OpenTelemetry name `m`.",
+		"Before that, `gateway/transform/units` removed its unit (`By`): set by metric statement",
+	} {
+		if !strings.Contains(d.Explanation, want) {
+			t.Errorf("explanation lacks %q: %s", want, d.Explanation)
+		}
+	}
+	if len(d.Hints) != 2 || d.Hints[0] != "Keep the metric's unit `By` in `gateway/transform/units`." || d.Hints[1] != "Or select `m` in alert `A`." {
+		t.Errorf("hints = %q", d.Hints)
+	}
+}

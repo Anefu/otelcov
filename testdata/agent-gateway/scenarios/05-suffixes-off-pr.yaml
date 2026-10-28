@@ -1,0 +1,17 @@
+# A PR turns off otel_metric_suffixes_enabled in Mimir. process.memory.usage
+# then becomes process_memory_usage instead of process_memory_usage_bytes, and
+# the rule, which selects the suffixed name, sees neither pod.
+name: 05-suffixes-off-pr
+description: "A PR turns off Mimir's metric name suffixes."
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  recording: ../recordings/staging.otlp.jsonl
+  snapshot: ../recordings/staging.meta.yaml
+
+config:
+  pods: ../k8s/pods.yaml
+  topology: ../topology-suffixes-off.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/05-suffixes-off-pr.report.json

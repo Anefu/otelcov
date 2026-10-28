@@ -99,6 +99,11 @@ func Evaluate(ctx context.Context, eng *promqlx.Engine, expr parser.Expr, items 
 		e := lineage.Event{Attribute: d.Label, Action: lineage.Dropped, Reason: d.Reason}
 		if d.Clause == "selector" {
 			e.Detail = map[string]any{"requires": map[string]any{"label": d.Label, "matcher": d.Matcher, "clause": d.Clause}}
+			if d.Name != nil {
+				e.Detail["metric_name"] = map[string]any{
+					"want": d.Name.Want, "got": d.Name.Got, "want_suffix": d.Name.WantSuffix, "got_suffix": d.Name.GotSuffix,
+				}
+			}
 		} else {
 			e.Detail = map[string]any{"clause": d.Clause}
 		}

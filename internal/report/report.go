@@ -498,6 +498,9 @@ func (ix *index) diagnose(c check, entry Entry, drop lineage.Event) *Diagnosis {
 		matcher, _ = reqs["matcher"].(string)
 	}
 	where := nodeRef(drop.Node)
+	if nm, ok := drop.Detail["metric_name"].(map[string]any); ok {
+		return ix.diagnoseName(c, entry, d, nm, where)
+	}
 	if label == "" {
 		d.Explanation = fmt.Sprintf("%s drops this pod's series: %s.", capitalize(where), drop.Reason)
 		d.Hints = []string{"Check the matching in " + where + " against this pod's series."}
@@ -543,6 +546,82 @@ func (ix *index) diagnose(c check, entry Entry, drop lineage.Event) *Diagnosis {
 	d.RootCause = root.ID
 	d.Explanation += fmt.Sprintf(", which %s didn't set: %s.", q(root.Node), root.Reason)
 	d.Hints = hints(c, attr, root, matcher, where)
+	return d
+}
+
+// diagnoseName explains a series that reaches a selector under another name
+// for its metric: Mimir's translation, and the last processor that changed
+// the metric's name or unit.
+func (ix *index) diagnoseName(c check, entry Entry, d *Diagnosis, nm map[string]any, where string) *Diagnosis {
+	str := func(k string) string { s, _ := nm[k].(string); return s }
+	want, got, wantSuffix, gotSuffix := str("want"), str("got"), str("want_suffix"), str("got_suffix")
+	d.Explanation = fmt.Sprintf("%s selects metric %s, but this pod's series is named %s, so it never reaches %s.",
+		capitalize(where), q(want), q(got), q(c.alert))
+
+	// The backend's translation that named the series.
+	var backend lineage.Event
+	at := -1
+	for i := len(entry.Path) - 1; i >= 0 && at < 0; i-- {
+		for _, e := range ix.events[entry.Path[i]] {
+			m, _ := e.Detail["metric"].(map[string]any)
+			if strings.HasPrefix(e.Node, mimir.Prefix) && e.Action == lineage.Derived && m["to"] == got {
+				backend, at = e, i
+				break
+			}
+		}
+	}
+	setting := q("otel_metric_suffixes_enabled")
+	switch {
+	case gotSuffix == "" && wantSuffix != "":
+		d.Hints = []string{
+			fmt.Sprintf("Mimir adds unit and type suffixes such as %s only when %s is on for the tenant, and only from the metric's unit: check both.", q("_"+wantSuffix), setting),
+			fmt.Sprintf("Or select %s in %s.", q(got), where),
+		}
+	case wantSuffix == "" && gotSuffix != "":
+		d.Hints = []string{fmt.Sprintf("Select %s in %s: Mimir adds unit and type suffixes when %s is on.", q(got), where, setting)}
+	default:
+		d.Hints = []string{fmt.Sprintf("Select %s in %s, or check the metric's unit and how Mimir translates names (%s).", q(got), where, setting)}
+	}
+	if at < 0 {
+		return d
+	}
+	m := backend.Detail["metric"].(map[string]any)
+	from, _ := m["from"].(string)
+	d.Chain = append(d.Chain, backend.ID)
+	d.RootCause = backend.ID
+	if from == got {
+		d.Explanation += fmt.Sprintf(" Mimir keeps the OpenTelemetry name %s.", q(from))
+	} else {
+		d.Explanation += fmt.Sprintf(" Mimir translates OpenTelemetry metric %s to %s.", q(from), q(got))
+	}
+
+	// The last processor before the backend that changed the metric's name
+	// or unit, which decide the translated name.
+	var change lineage.Event
+	for _, id := range entry.Path[:at] {
+		for _, e := range ix.events[id] {
+			if e.Action == lineage.Set && (e.Attribute == "metric.unit" || e.Attribute == "metric.name") {
+				change = e
+			}
+		}
+	}
+	if change.ID == "" {
+		return d
+	}
+	field := strings.TrimPrefix(change.Attribute, "metric.")
+	was, _ := change.Detail["was"].(string)
+	now, _ := change.Value.(string)
+	what := fmt.Sprintf("changed its %s from %s to %s", field, q(was), q(now))
+	switch {
+	case now == "":
+		what = fmt.Sprintf("removed its %s (%s)", field, q(was))
+	case was == "":
+		what = fmt.Sprintf("set its %s to %s", field, q(now))
+	}
+	d.Chain = append(d.Chain, change.ID)
+	d.RootCause = change.ID
+	d.Explanation += fmt.Sprintf(" Before that, %s %s: %s.", q(change.Node), what, change.Reason)
+	d.Hints = append([]string{fmt.Sprintf("Keep the metric's %s %s in %s.", field, q(was), q(change.Node))}, d.Hints[len(d.Hints)-1])
 	return d
 }
 
