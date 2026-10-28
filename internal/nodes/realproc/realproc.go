@@ -182,43 +182,51 @@ func (n *Node) run(ctx context.Context, g []unit.Metric) (graph.Output, error) {
 	}
 
 	// Match outputs to inputs.
+	as, uncertain := assign(before, outs)
 	claimed := make([]bool, len(g))
-	for _, o := range outs {
-		parent, exact := n.match(g, before, o, claimed)
-		switch {
-		case exact && !claimed[parent]:
+	for oi, o := range outs {
+		a := as[oi]
+		if a.input >= 0 && !a.copy {
+			parent := a.input
 			claimed[parent] = true
 			out.Items = append(out.Items, unit.Metric{ID: g[parent].ID, From: g[parent].From, Data: o})
 			for _, e := range n.explainChanges(ctx, before[parent], o) {
 				emit(g[parent].ID, e)
 			}
+			if a.uncertain != "" {
+				emit(g[parent].ID, lineage.Event{Action: lineage.Unverified, Reason: a.uncertain})
+			}
 			if n.uncertain != "" {
 				emit(g[parent].ID, lineage.Event{Action: lineage.Unverified, Reason: n.uncertain})
 			}
-		default:
-			// A new signal: a copy of one input, or an output no single
-			// input explains (then every input of the unit is a parent).
-			var from []lineage.SignalID
-			reason := "created by the " + n.typ + " processor"
-			if exact {
-				from = []lineage.SignalID{g[parent].ID}
-			} else {
-				for _, it := range g {
-					from = append(from, it.ID)
-				}
-				reason += "; no single input explains it, so every input of the metric is a parent"
-			}
-			id := n.ids.Next()
-			out.Items = append(out.Items, unit.Metric{ID: id, From: from, Data: o})
-			out.Signals = append(out.Signals, lineage.Signal{
-				ID: id, Node: n.name, Kind: "otlp_metric", Name: unit.FirstMetric(o).Name(), From: from,
-				Resource: unit.Resource(o).Attributes().AsRaw(),
-			})
-			emit(id, lineage.Event{Action: lineage.Derived, From: from, Reason: reason})
+			continue
 		}
+		// A new signal: a copy of one input, or an output no single input
+		// explains (then every input of the unit is a parent).
+		var from []lineage.SignalID
+		reason := "created by the " + n.typ + " processor"
+		if a.input >= 0 {
+			from = []lineage.SignalID{g[a.input].ID}
+		} else {
+			for _, it := range g {
+				from = append(from, it.ID)
+			}
+			reason += "; no single input explains it, so every input of the metric is a parent"
+		}
+		id := n.ids.Next()
+		out.Items = append(out.Items, unit.Metric{ID: id, From: from, Data: o})
+		out.Signals = append(out.Signals, lineage.Signal{
+			ID: id, Node: n.name, Kind: "otlp_metric", Name: unit.FirstMetric(o).Name(), From: from,
+			Resource: unit.Resource(o).Attributes().AsRaw(),
+		})
+		emit(id, lineage.Event{Action: lineage.Derived, From: from, Reason: reason})
 	}
 	for i, it := range g {
 		if !claimed[i] && !hasChild(out.Signals, it.ID) {
+			if why, ok := uncertain[i]; ok {
+				emit(it.ID, lineage.Event{Action: lineage.Unverified, Reason: why + "; this input may have been dropped"})
+				continue
+			}
 			reason := "the " + n.typ + " processor dropped it"
 			if n.filter != nil {
 				if why := n.filter.why(ctx, before[i]); why != "" {
@@ -231,30 +239,131 @@ func (n *Node) run(ctx context.Context, g []unit.Metric) (graph.Output, error) {
 	return out, nil
 }
 
-// match finds the input an output came from. Within a unit of one item it's
-// that item; within a metric group it's the input with the same timestamps
-// and value, if exactly one has them.
-func (n *Node) match(g []unit.Metric, before []pmetric.Metrics, o pmetric.Metrics, claimed []bool) (int, bool) {
-	if len(g) == 1 {
-		return 0, true
+// assignment says which input an output came from.
+type assignment struct {
+	input int  // index into the unit's inputs; -1: no single input explains it
+	copy  bool // a further output from an input that's already matched
+	// uncertain is set when several inputs fit and the match is by order.
+	uncertain string
+}
+
+// assign matches a unit's outputs to its inputs. With one input, every
+// output comes from it. In a metric group, outputs are matched by timestamps
+// and value, and among those, by point attributes:
+//
+//   - an input with the same timestamps, value and attributes is a match
+//     (inputs identical in all three are interchangeable, so ties go in order);
+//   - if the processor changed the attributes, the only remaining input with
+//     the same timestamps and value is a match;
+//   - if several remain, the outputs are matched in order, and the match is
+//     uncertain unless the outputs are identical, one per input. Inputs left
+//     over from an uncertain match may or may not have been dropped.
+//
+// The second return value lists those uncertain leftover inputs, with why.
+func assign(before, outs []pmetric.Metrics) ([]assignment, map[int]string) {
+	as := make([]assignment, len(outs))
+	uncertain := map[int]string{}
+	if len(before) == 1 {
+		for i := range outs {
+			as[i] = assignment{input: 0, copy: i > 0}
+		}
+		return as, uncertain
 	}
-	k := pointKey(o)
-	var cands []int
-	for i := range g {
-		if pointKey(before[i]) == k {
-			cands = append(cands, i)
+	inKey, inAttrs := make([]string, len(before)), make([]string, len(before))
+	for i, md := range before {
+		inKey[i], inAttrs[i] = pointKey(md), attrsKey(md)
+	}
+	outKey, outAttrs := make([]string, len(outs)), make([]string, len(outs))
+	var keys []string
+	byKey := map[string][]int{}
+	for i, md := range outs {
+		outKey[i], outAttrs[i] = pointKey(md), attrsKey(md)
+		if _, ok := byKey[outKey[i]]; !ok {
+			keys = append(keys, outKey[i])
+		}
+		byKey[outKey[i]] = append(byKey[outKey[i]], i)
+	}
+	claimed := make([]bool, len(before))
+	for _, k := range keys {
+		var ins []int
+		for i := range before {
+			if inKey[i] == k {
+				ins = append(ins, i)
+			}
+		}
+		if len(ins) == 0 {
+			for _, o := range byKey[k] {
+				as[o] = assignment{input: -1}
+			}
+			continue
+		}
+		var rest []int
+		for _, o := range byKey[k] {
+			found := -1
+			for _, i := range ins {
+				if !claimed[i] && inAttrs[i] == outAttrs[o] {
+					found = i
+					break
+				}
+			}
+			if found < 0 {
+				rest = append(rest, o)
+				continue
+			}
+			claimed[found] = true
+			as[o] = assignment{input: found}
+		}
+		var left []int
+		for _, i := range ins {
+			if !claimed[i] {
+				left = append(left, i)
+			}
+		}
+		switch {
+		case len(rest) == 0:
+		case len(left) == 0:
+			for _, o := range rest {
+				as[o] = assignment{input: ins[0], copy: true}
+			}
+		case len(left) == 1:
+			claimed[left[0]] = true
+			as[rest[0]] = assignment{input: left[0]}
+			for _, o := range rest[1:] {
+				as[o] = assignment{input: left[0], copy: true}
+			}
+		default:
+			identical := len(rest) == len(left)
+			for _, o := range rest[1:] {
+				identical = identical && outAttrs[o] == outAttrs[rest[0]]
+			}
+			reason := ""
+			if !identical {
+				reason = fmt.Sprintf("%d inputs have the same timestamps and value, and the processor changed their point attributes, so which input each output came from is uncertain", len(left))
+			}
+			for j, o := range rest {
+				if j < len(left) {
+					claimed[left[j]] = true
+					as[o] = assignment{input: left[j], uncertain: reason}
+				} else {
+					as[o] = assignment{input: left[0], copy: true}
+				}
+			}
+			if reason != "" {
+				for _, i := range left {
+					if !claimed[i] {
+						uncertain[i] = reason
+					}
+				}
+			}
 		}
 	}
-	if len(cands) == 0 {
-		return 0, false
-	}
-	// Several inputs may share timestamps and value: take them in order.
-	for _, c := range cands {
-		if !claimed[c] {
-			return c, true
-		}
-	}
-	return cands[0], true // all taken: a copy of the first
+	return as, uncertain
+}
+
+// attrsKey identifies an item's data point attributes.
+func attrsKey(md pmetric.Metrics) string {
+	b, _ := json.Marshal(pointAttrs(unit.FirstMetric(md)).AsRaw())
+	return string(b)
 }
 
 func hasChild(signals []lineage.Signal, id lineage.SignalID) bool {

@@ -244,3 +244,67 @@ func TestEditorPart(t *testing.T) {
 		}
 	}
 }
+
+// gaugePoint is a one-point gauge with a "pod" point attribute, all at the
+// same timestamp, as from one scrape.
+func gaugePoint(id string, v float64, pod string) unit.Metric {
+	md := pmetric.NewMetrics()
+	m := md.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("m")
+	dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
+	dp.SetTimestamp(2_000_000_000)
+	dp.SetDoubleValue(v)
+	dp.Attributes().PutStr("pod", pod)
+	return unit.Metric{ID: lineage.SignalID(id), Data: md}
+}
+
+func podOf(it unit.Metric) string {
+	v, _ := unit.FirstMetric(it.Data).Gauge().DataPoints().At(0).Attributes().Get("pod")
+	return v.AsString()
+}
+
+// Two points with the same timestamp and value: the one the filter drops is
+// the one reported dropped (otelcov used to swap them).
+func TestGroupMatchingUsesPointAttributes(t *testing.T) {
+	cfg := map[string]any{"metrics": map[string]any{"datapoint": []any{`attributes["pod"] == "a"`}}}
+	items, events, _ := run(t, "filter/drop-a", cfg, gaugePoint("pod-a", 0, "a"), gaugePoint("pod-b", 0, "b"))
+	if _, kept := items["pod-a"]; kept {
+		t.Errorf("pod a's point should be dropped: %+v", events)
+	}
+	if b, ok := items["pod-b"]; !ok || podOf(b) != "b" {
+		t.Errorf("pod b's point should pass unchanged: %+v", items)
+	}
+	if !find(events, "pod-a", "", lineage.Dropped) || find(events, "pod-b", "", lineage.Dropped) || find(events, "pod-b", "pod", lineage.Set) {
+		t.Errorf("events: %+v", events)
+	}
+}
+
+// Points with the same timestamp and value whose attributes the processor
+// changes differently can't be told apart: the match is unverified, not
+// guessed. When every output is identical, the order can't matter.
+func TestAmbiguousGroupMatchIsUnverified(t *testing.T) {
+	stmts := func(s ...any) map[string]any {
+		return map[string]any{"metric_statements": []any{map[string]any{"context": "datapoint", "statements": s}}}
+	}
+	_, events, _ := run(t, "transform/rename", stmts(
+		`set(attributes["pod"], "x") where attributes["pod"] == "a"`,
+		`set(attributes["pod"], "y") where attributes["pod"] == "b"`,
+	), gaugePoint("pod-a", 0, "a"), gaugePoint("pod-b", 0, "b"))
+	if !find(events, "pod-a", "", lineage.Unverified) || !find(events, "pod-b", "", lineage.Unverified) {
+		t.Errorf("both matches should be unverified: %+v", events)
+	}
+
+	items, events, _ := run(t, "transform/same", stmts(`set(attributes["pod"], "x")`),
+		gaugePoint("pod-a", 0, "a"), gaugePoint("pod-b", 0, "b"))
+	if len(items) != 2 || find(events, "pod-a", "", lineage.Unverified) || find(events, "pod-b", "", lineage.Unverified) {
+		t.Errorf("identical outputs need no uncertainty: items %d, events %+v", len(items), events)
+	}
+
+	// Changed attributes, but only one input left with that timestamp and
+	// value: a certain match.
+	items, events, _ = run(t, "transform/one", stmts(`set(attributes["pod"], "x") where attributes["pod"] == "a"`),
+		gaugePoint("pod-a", 0, "a"), gaugePoint("pod-b", 0, "b"))
+	if podOf(items["pod-a"]) != "x" || podOf(items["pod-b"]) != "b" || find(events, "pod-a", "", lineage.Unverified) {
+		t.Errorf("want pod a renamed and pod b unchanged: %+v", events)
+	}
+}
