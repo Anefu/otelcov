@@ -137,8 +137,8 @@ Other deployment patterns and backends come later, as adapters.
 
 ### Requirements
 
-- Proposed principle (the owner hasn't explicitly confirmed it): written **in OTel terms, not backend terms**: "every pod with `app=vllm`: `process.memory.usage` must reach alert X, then receiver Y". The same requirement then works whatever backend stores the data. Draft format: `testdata/thin-slice/requirements/vllm.yaml`.
-- **Next format: A** (decision 57, not built yet). Each requirement names its `subjects`, a `signal` and the destinations it `reaches` (all must hold), plus optional `must_not_reach`:
+- Proposed principle (the owner hasn't explicitly confirmed it): written **in OTel terms, not backend terms**: "every pod with `app=vllm`: `process.memory.usage` must reach alert X, then receiver Y". The same requirement then works whatever backend stores the data.
+- **Format A** (decision 57, `internal/requirements`). Each requirement names its `subjects`, a `signal` and the destinations it `reaches` (all must hold), plus optional `must_not_reach`. Example files: `testdata/*/requirements/vllm.yaml`.
 
   ```yaml
   requirements:
@@ -158,10 +158,12 @@ Other deployment patterns and backends come later, as adapters.
       must_not_reach: [ { backend: mimir } ]
   ```
 
-  - **Built first: pods only.** Pod subjects, several metrics, alerts with several receivers, templated receivers, the labels check. Anything else in a file (other kinds, dashboards, `must_not_reach`) is accepted and comes out `unverified` ("not supported yet").
-  - **Templated receivers** take the label from the **pod's labels**.
+  - **Built: pods only.** Pod subjects (namespace, labels with `"*"` for "exists", container), several metrics (any counts), alert destinations with several receivers (all must be reached; none means any), templated receivers, and the labels check. Anything else in a file is accepted: other subject kinds give an `unverified` problem in the report's `problems` ("subjects of kind node aren't supported yet, so nothing was checked"); dashboard and backend destinations and `must_not_reach` make the pod's answer `unverified` ("dashboard destinations aren't supported yet").
+  - **One answer per requirement and pod**: every destination and receiver is checked, and the answer is the first not covered, else the first unverified, else the first covered with simulation, else covered. When a requirement has more than one, the answer's `destination` says which one it's about (`alert VLLMMemoryHigh → inference-pager`).
+  - **The labels check**: an alert routed to the receiver but missing a required label is not covered, broken at the alert, with "fires for this pod and reaches `inference-pager`, but it has no `k8s_pod_name` label". This catches a `by (…)` that drops the pod.
+  - **Templated receivers** take the label from the **pod's labels**: `{{ subject.labels.<label> }}`, `{{ subject.name }}`, `{{ subject.namespace }}`. A pod without the label gets `unverified`. The kind lab's compare checks the first alert destination, with its receivers resolved per pod.
   - **Kinds are shortcuts for OpenTelemetry entities**: each kind is defined by the resource attributes that identify it (pod: `k8s.pod.uid`, or namespace and name; node: `k8s.node.name`; workload: `k8s.deployment.name` etc. with the namespace), and `kind: entity` with `attributes:` covers things outside Kubernetes.
-  - **The current format is replaced**, not kept alongside: the three existing requirements files are converted.
+  - **The previous format is gone**: the three requirements files were converted, and the golden reports didn't change.
 
 ### Topology
 
@@ -399,7 +401,7 @@ Chosen while building the report page (decision 49):
 
 ## Known gaps
 
-- **A renamed metric leaves no trace** (found 2026-10-24): the rule explainer only records a drop for a near miss, a series with the selector's metric name that fails a matcher. If the metric reaches Mimir under another name (e.g. `otel_metric_suffixes_enabled` turned off, so `process_memory_usage` instead of `process_memory_usage_bytes`; a translation strategy change; a `metricstransform` rename), the selector ignores the series like any unrelated one. The pod comes out `unverified` with "the signal reaches no alert and nothing explains why": honest, but no diagnosis. Possible fix: also count a series as a near miss when its name differs only by a unit or type suffix, or when it comes from the same OTLP metric as the selected name would. Related: the CLI prints a dangling `✗` on the path line when there's no `broken_at`.
+- **A renamed metric leaves no trace** (found 2026-10-24): the rule explainer only records a drop for a near miss, a series with the selector's metric name that fails a matcher. If the metric reaches Mimir under another name (e.g. `otel_metric_suffixes_enabled` turned off, so `process_memory_usage` instead of `process_memory_usage_bytes`; a translation strategy change; a `metricstransform` rename), the selector ignores the series like any unrelated one. The pod comes out `unverified` with "the signal reaches no alert and nothing explains why": honest, but no diagnosis. Possible fix: also count a series as a near miss when its name differs only by a unit or type suffix, or when it comes from the same OTLP metric as the selected name would.
 - **Some transform configs give no `skipped` event**: statement groups with `conditions`, and statements without a context block (the shorter style recent collector docs show), aren't replayed. The real processor still runs and its changes are reported, but a statement that didn't run leaves no trace, so a diagnosis that depends on it stops one step early ("… which nothing sets for this pod") instead of naming the statement and its condition. Transform-only functions (`convert_sum_to_gauge`, `aggregate_on_attributes`, ...) aren't replayed either; their changes are reported as "changed by the transform processor", without the statement.
 - **k8sattributes attributes otelcov doesn't model**: image name and tag (upstream parses the image reference), service attributes (`service.version`, `service.instance.id`, ...), `k8s.pod.start_time`, image repo digests, labels and annotations. They come out `unverified`, which only matters when a route needs them. Upstream defaults extract image name and tag, so default configs get those `unverified` events.
 
@@ -517,7 +519,7 @@ internal/promqlx          real PromQL engine over in-memory series; the label-fl
 internal/rulefile         rule files (rulefmt), dependency order
 internal/ruleeval         one expression for coverage: rewrite, engine, explainer, parents
 internal/alerting         the Alert type
-internal/requirements     coverage requirements (OTel terms)
+internal/requirements     coverage requirements, format A (OTel terms)
 internal/report           summary, diagnosis
 internal/flowgraph        a scenario's components and how they connect, for the report page
 internal/htmlreport       the self-contained report page (page.html)

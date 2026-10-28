@@ -508,6 +508,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     var verdict;
     if (e.status === "not_covered") verdict = ["Not covered: the route breaks at ", code(e.broken_at || "?"), "."];
     else if (e.status === "unverified" && e.broken_at) verdict = ["Unverified: nothing to follow from ", code(e.broken_at), "."];
+    else if (e.status === "unverified" && !e.receiver) verdict = ["Unverified: otelcov can't check this yet."];
     else if (e.status === "unverified") verdict = ["Unverified: the route reaches ", code(e.receiver || "?"), ", but otelcov can't vouch for every step."];
     else if (e.status === "covered_simulated") verdict = ["Covered, if the simulated changes deploy as written: reaches ", code(e.receiver || "?"), "."];
     else verdict = ["Covered: reaches ", code(e.receiver || "?"), "."];
@@ -540,7 +541,8 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     sec.appendChild(h("header", { class: "route-head" },
       h("h2", null, row.pod),
       h("p", { class: "context" }, h("b", { text: sc.report.scenario }), ". ",
-        sc.description ? sc.description + " " : "", "Requirement ", code(e.requirement), "."),
+        sc.description ? sc.description + " " : "", "Requirement ", code(e.requirement),
+        e.destination ? [", ", e.destination] : null, "."),
       h("p", { class: "verdict" }, verdict)));
     if (notes.childNodes.length) sec.appendChild(notes);
 

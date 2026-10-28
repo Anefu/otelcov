@@ -124,16 +124,22 @@ func printText(w io.Writer, rep *report.Report) {
 			report.NotCovered:       "NOT COVERED",
 			report.Unverified:       "unverified",
 		}[e.Status]
-		fmt.Fprintf(w, "  %-20s %s  [%s]\n", label, e.Pod, e.Requirement)
+		about := e.Requirement
+		if e.Destination != "" {
+			about += ": " + e.Destination
+		}
+		fmt.Fprintf(w, "  %-20s %s  [%s]\n", label, e.Pod, about)
 		path := make([]string, len(e.Path))
 		for i, id := range e.Path {
 			path[i] = string(id)
 		}
 		switch {
+		case len(path) > 0 && e.BrokenAt != "":
+			fmt.Fprintf(w, "      path: %s ✗ %s\n", strings.Join(path, " → "), e.BrokenAt)
 		case e.Receiver != "":
 			fmt.Fprintf(w, "      path: %s → %s\n", strings.Join(path, " → "), e.Receiver)
 		case len(path) > 0:
-			fmt.Fprintf(w, "      path: %s ✗ %s\n", strings.Join(path, " → "), e.BrokenAt)
+			fmt.Fprintf(w, "      path: %s\n", strings.Join(path, " → "))
 		}
 		for _, id := range e.SimulatedBy {
 			ev := events[id]

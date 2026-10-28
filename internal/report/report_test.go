@@ -12,14 +12,12 @@ import (
 )
 
 func req() requirements.Requirement {
-	var r requirements.Requirement
-	r.ID = "watched"
-	r.ForEachPod.Namespace = "ns"
-	r.Signal.Metric = "m"
-	r.Signal.Container = "app"
-	r.MustReach.Alert = "A"
-	r.MustReach.Receiver = "pager"
-	return r
+	return requirements.Requirement{
+		ID:       "watched",
+		Subjects: requirements.Subjects{Kind: requirements.KindPod, Namespace: "ns", Container: "app"},
+		Signal:   requirements.Signal{Metrics: []string{"m"}},
+		Reaches:  []requirements.Destination{{Alert: "A", Receivers: []string{"pager"}}},
+	}
 }
 
 func pods(names ...string) []corev1.Pod {
@@ -86,6 +84,87 @@ func TestStatuses(t *testing.T) {
 	t.Run("no telemetry from the pod", func(t *testing.T) {
 		r := Build("x", "", chain(t, routed("pager")), []requirements.Requirement{req()}, pods("other"))
 		if e := r.Summary[0]; e.Status != Unverified || e.BrokenAt != "source/otlp-replay" || !strings.Contains(e.Reason, "app container") {
+			t.Errorf("%+v", e)
+		}
+	})
+}
+
+func withReaches(r requirements.Requirement, d ...requirements.Destination) requirements.Requirement {
+	r.Reaches = d
+	return r
+}
+
+// Format A destinations (decision 57).
+func TestDestinations(t *testing.T) {
+	build := func(r requirements.Requirement, pod corev1.Pod, route ...lineage.Event) *Report {
+		return Build("x", "", chain(t, route...), []requirements.Requirement{r}, []corev1.Pod{pod})
+	}
+	pod := pods("p")[0]
+
+	t.Run("every receiver must be reached", func(t *testing.T) {
+		r := build(withReaches(req(), requirements.Destination{Alert: "A", Receivers: []string{"pager", "email"}}), pod, routed("pager"))
+		if e := r.Summary[0]; e.Status != NotCovered || e.Destination != "alert A → email" || e.BrokenAt != "alertmanager/route" {
+			t.Errorf("%+v", e)
+		}
+	})
+	t.Run("no receivers means any", func(t *testing.T) {
+		r := build(withReaches(req(), requirements.Destination{Alert: "A"}), pod, routed("email"))
+		if e := r.Summary[0]; e.Status != Covered || e.Receiver != "email" || e.Destination != "" {
+			t.Errorf("%+v", e)
+		}
+	})
+	t.Run("receiver templated from a pod label", func(t *testing.T) {
+		labeled := pod
+		labeled.Labels = map[string]string{"team": "search"}
+		tmpl := withReaches(req(), requirements.Destination{Alert: "A", Receivers: []string{"{{ subject.labels.team }}-pager"}})
+		if e := build(tmpl, labeled, routed("search-pager")).Summary[0]; e.Status != Covered {
+			t.Errorf("%+v", e)
+		}
+		if e := build(tmpl, pod, routed("search-pager")).Summary[0]; e.Status != Unverified || !strings.Contains(e.Reason, "needs pod label `team`") {
+			t.Errorf("a pod without the label can't be checked: %+v", e)
+		}
+	})
+	t.Run("the alert must carry the required labels", func(t *testing.T) {
+		r := build(withReaches(req(), requirements.Destination{Alert: "A", Receivers: []string{"pager"}, Labels: []string{"k8s_pod_name"}}), pod, routed("pager"))
+		e := r.Summary[0]
+		if e.Status != NotCovered || e.BrokenAt != "alert/A" || e.Receiver != "pager" {
+			t.Errorf("%+v", e)
+		}
+		if len(r.Diagnosis) != 1 || !strings.Contains(r.Diagnosis[0].Explanation, "has no `k8s_pod_name` label") || r.Diagnosis[0].RootCause == "" {
+			t.Errorf("%+v", r.Diagnosis)
+		}
+	})
+	t.Run("unsupported destinations are unverified, after what fails", func(t *testing.T) {
+		r := withReaches(req(),
+			requirements.Destination{Alert: "A", Receivers: []string{"pager"}},
+			requirements.Destination{Dashboard: &requirements.Dashboard{UID: "d", Panel: "p"}})
+		e := build(r, pod, routed("pager")).Summary[0]
+		if e.Status != Unverified || e.Reason != "dashboard destinations aren't supported yet" || !strings.HasPrefix(e.Destination, "dashboard d") {
+			t.Errorf("%+v", e)
+		}
+		// A destination that isn't covered wins over one that can't be checked.
+		e = build(r, pod, routed("email")).Summary[0]
+		if e.Status != NotCovered {
+			t.Errorf("%+v", e)
+		}
+		r = req()
+		r.MustNotReach = []requirements.Destination{{Backend: "mimir"}}
+		if e := build(r, pod, routed("pager")).Summary[0]; e.Status != Unverified || e.Reason != "must_not_reach isn't supported yet" {
+			t.Errorf("%+v", e)
+		}
+	})
+	t.Run("other subject kinds are reported, not checked", func(t *testing.T) {
+		r := req()
+		r.Subjects = requirements.Subjects{Kind: requirements.KindNode}
+		rep := build(r, pod, routed("pager"))
+		if len(rep.Summary) != 0 || len(rep.Problems) != 1 || !strings.Contains(rep.Problems[0].Message, "kind node aren't supported yet") {
+			t.Errorf("summary %+v, problems %+v", rep.Summary, rep.Problems)
+		}
+	})
+	t.Run("any of the metrics counts", func(t *testing.T) {
+		r := req()
+		r.Signal.Metrics = []string{"other", "m"}
+		if e := build(r, pod, routed("pager")).Summary[0]; e.Status != Covered {
 			t.Errorf("%+v", e)
 		}
 	})

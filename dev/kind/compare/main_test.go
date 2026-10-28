@@ -120,7 +120,7 @@ func TestVerdict(t *testing.T) {
 		{report.NotCovered, truth{ruler: "firing"}, "DISAGREE: the alert exists"},
 		{report.Unverified, truth{}, "n/a"},
 	} {
-		if got := verdict(tc.status, tc.t, "pager"); !strings.HasPrefix(got, tc.want) {
+		if got := verdict(tc.status, tc.t, []string{"pager"}); !strings.HasPrefix(got, tc.want) {
 			t.Errorf("verdict(%s, %+v) = %q, want %q...", tc.status, tc.t, got, tc.want)
 		}
 	}

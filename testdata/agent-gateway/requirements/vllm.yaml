@@ -1,13 +1,15 @@
 requirements:
   - id: vllm-memory-watched
-    description: Every vLLM pod's memory is watched by VLLMMemoryHigh, which pages the inference team.
-    for_each_pod:
+    description: Every vLLM pod's memory is watched by VLLMMemoryHigh, which pages the inference team and says which pod.
+    subjects:
+      kind: pod
       namespace: inference
-      selector:
+      labels:
         app.kubernetes.io/name: vllm
+      container: vllm                  # the container expected to send it
     signal:
-      metric: process.memory.usage
-      container: vllm
-    must_reach:
-      alert: VLLMMemoryHigh
-      receiver: inference-pager
+      metrics: [process.memory.usage]  # OTel names, as recorded; any of them counts
+    reaches:
+      - alert: VLLMMemoryHigh
+        receivers: [inference-pager]
+        labels: [k8s_pod_name]         # the alert must say which pod

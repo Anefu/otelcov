@@ -32,7 +32,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/Anefu/otelcov/internal/htmlreport"
+	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/report"
 	"github.com/Anefu/otelcov/internal/requirements"
 	"github.com/Anefu/otelcov/internal/scenario"
@@ -200,6 +203,14 @@ func compare(ctx context.Context, o options, s *scenario.Scenario, rep *report.R
 	if err != nil {
 		return false, nil, err
 	}
+	pods, _, err := kube.LoadPods(s.Config.Pods)
+	if err != nil {
+		return false, nil, err
+	}
+	podByRef := map[string]*corev1.Pod{}
+	for i := range pods {
+		podByRef[kube.Ref(&pods[i])] = &pods[i]
+	}
 	truths := map[string]htmlreport.Truth{}
 	byID := map[string]requirements.Requirement{}
 	for _, r := range reqs {
@@ -211,13 +222,13 @@ func compare(ctx context.Context, o options, s *scenario.Scenario, rep *report.R
 	fmt.Fprintln(tw, "  POD\tOTELCOV\tREAL STACK\tVERDICT")
 	disagree := false
 	for _, e := range rep.Summary {
-		req := byID[e.Requirement]
+		alert, receivers := firstAlert(byID[e.Requirement], podByRef[e.Pod])
 		ns, pod, _ := strings.Cut(e.Pod, "/")
-		t, err := o.lookup(ctx, ns, pod, req.MustReach.Alert)
+		t, err := o.lookup(ctx, ns, pod, alert)
 		if err != nil {
 			return false, nil, err
 		}
-		v := verdict(e.Status, t, req.MustReach.Receiver)
+		v := verdict(e.Status, t, receivers)
 		truths[htmlreport.TruthKey(e.Requirement, e.Pod)] = htmlreport.Truth{Real: t.String(), Verdict: v}
 		disagree = disagree || strings.HasPrefix(v, "DISAGREE")
 		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", e.Pod, e.Status, t, v)
@@ -250,11 +261,41 @@ func (t truth) String() string {
 	return strings.Join(parts, "; ")
 }
 
-// verdict compares otelcov's status with the real stack.
-func verdict(status string, t truth, receiver string) string {
-	routed := false
+// firstAlert returns a requirement's first alert destination and its
+// receivers, resolved for the pod ("" for any receiver). compare checks that
+// one destination against the real stack.
+func firstAlert(req requirements.Requirement, pod *corev1.Pod) (string, []string) {
+	for _, d := range req.Reaches {
+		if d.Alert == "" {
+			continue
+		}
+		var out []string
+		for _, tmpl := range d.Receivers {
+			if pod == nil {
+				continue
+			}
+			if r, err := requirements.Resolve(tmpl, pod); err == nil {
+				out = append(out, r)
+			}
+		}
+		if len(d.Receivers) == 0 {
+			out = []string{""}
+		}
+		return d.Alert, out
+	}
+	return "", nil
+}
+
+// verdict compares otelcov's status with the real stack. receivers are the
+// ones the alert must reach, all of them ("" for any).
+func verdict(status string, t truth, receivers []string) string {
+	got := map[string]bool{}
 	for _, r := range t.receivers {
-		routed = routed || r == receiver
+		got[r] = true
+	}
+	routed := len(receivers) > 0
+	for _, r := range receivers {
+		routed = routed && (got[r] || (r == "" && len(t.receivers) > 0))
 	}
 	alerting := t.ruler != "" || len(t.receivers) > 0
 	if t.gone {

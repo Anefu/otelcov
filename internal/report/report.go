@@ -47,6 +47,9 @@ type Entry struct {
 	// UnverifiedBy lists the unverified events on the path.
 	UnverifiedBy []string `json:"unverified_by,omitempty"`
 	Reason       string   `json:"reason,omitempty"`
+	// Destination names the alert and receiver (or other destination) the
+	// status is about, when the requirement has several.
+	Destination string `json:"destination,omitempty"`
 }
 
 // Diagnosis explains one break, from where it happened back to its root cause.
@@ -86,8 +89,13 @@ func Build(scenario, evalTime string, log *lineage.Log, reqs []requirements.Requ
 		r.Signals[s.ID] = s
 	}
 	for _, req := range reqs {
+		if req.Subjects.Kind != requirements.KindPod {
+			r.Problems = append(r.Problems, topology.Problem{Severity: topology.Unverified, Where: "requirement " + req.ID,
+				Message: fmt.Sprintf("subjects of kind %s aren't supported yet, so nothing was checked", req.Subjects.Kind)})
+			continue
+		}
 		for _, pod := range req.Pods(pods) {
-			entry, diag := ix.answer(req, pod)
+			entry, diag := ix.answerRequirement(req, pod)
 			r.Summary = append(r.Summary, entry)
 			if diag != nil {
 				r.Diagnosis = append(r.Diagnosis, *diag)
@@ -95,6 +103,80 @@ func Build(scenario, evalTime string, log *lineage.Log, reqs []requirements.Requ
 		}
 	}
 	return r
+}
+
+// check is one thing a pod's signal must do: reach an alert that is routed
+// to a receiver ("" for any) and carries some labels.
+type check struct {
+	requirement string
+	metrics     []string
+	container   string
+	alert       string
+	receiver    string
+	labels      []string
+}
+
+// answerRequirement checks every destination of a pod requirement and
+// returns the answer that matters most: the first not covered, else the first
+// unverified, else the first covered with simulation, else covered.
+func (ix *index) answerRequirement(req requirements.Requirement, pod *corev1.Pod) (Entry, *Diagnosis) {
+	base := Entry{Requirement: req.ID, Pod: kube.Ref(pod), Path: []lineage.SignalID{}}
+	type result struct {
+		e Entry
+		d *Diagnosis
+	}
+	var results []result
+	unsupported := func(dest, why string) {
+		e := base
+		e.Status, e.Reason, e.Destination = Unverified, why, dest
+		results = append(results, result{e: e})
+	}
+	for _, dest := range req.Reaches {
+		if dest.Alert == "" {
+			kind := "backend"
+			if dest.Dashboard != nil {
+				kind = "dashboard"
+			}
+			unsupported(dest.String(), kind+" destinations aren't supported yet")
+			continue
+		}
+		receivers := dest.Receivers
+		if len(receivers) == 0 {
+			receivers = []string{""}
+		}
+		for _, tmpl := range receivers {
+			rcv, err := requirements.Resolve(tmpl, pod)
+			if err != nil {
+				unsupported(destination(dest.Alert, tmpl), err.Error())
+				continue
+			}
+			e, d := ix.answer(check{requirement: req.ID, metrics: req.Signal.Metrics, container: req.Subjects.Container,
+				alert: dest.Alert, receiver: rcv, labels: dest.Labels}, pod, base)
+			e.Destination = destination(dest.Alert, rcv)
+			results = append(results, result{e, d})
+		}
+	}
+	for _, dest := range req.MustNotReach {
+		unsupported("not "+dest.String(), "must_not_reach isn't supported yet")
+	}
+	if len(results) == 1 {
+		results[0].e.Destination = ""
+	}
+	for _, status := range []string{NotCovered, Unverified, CoveredSimulated} {
+		for _, r := range results {
+			if r.e.Status == status {
+				return r.e, r.d
+			}
+		}
+	}
+	return results[0].e, results[0].d
+}
+
+func destination(alert, receiver string) string {
+	if receiver == "" {
+		receiver = "any receiver"
+	}
+	return "alert " + alert + " → " + receiver
 }
 
 type index struct {
@@ -132,17 +214,21 @@ func (ix *index) find(id lineage.SignalID, match func(lineage.Event) bool) (line
 	return lineage.Event{}, false
 }
 
-// sources finds the recorded signals of a requirement's metric sent by pod.
-func (ix *index) sources(req requirements.Requirement, pod *corev1.Pod) []lineage.SignalID {
+// sources finds the recorded signals of a check's metrics sent by pod.
+func (ix *index) sources(c check, pod *corev1.Pod) []lineage.SignalID {
 	ref := kube.Ref(pod)
+	metric := map[string]bool{}
+	for _, m := range c.metrics {
+		metric[m] = true
+	}
 	var out []lineage.SignalID
 	for _, id := range ix.order {
 		s := ix.signals[id]
-		if s.Node != source.Name || s.Name != req.Signal.Metric {
+		if s.Node != source.Name || !metric[s.Name] {
 			continue
 		}
 		if e, ok := ix.find(id, func(e lineage.Event) bool { return e.Node == sdkenv.Name && e.Action == lineage.Attributed }); ok {
-			if e.Detail["pod"] == ref && (req.Signal.Container == "" || e.Detail["container"] == req.Signal.Container) {
+			if e.Detail["pod"] == ref && (c.container == "" || e.Detail["container"] == c.container) {
 				out = append(out, id)
 			}
 			continue
@@ -151,28 +237,27 @@ func (ix *index) sources(req requirements.Requirement, pod *corev1.Pod) []lineag
 		// can't check the container.
 		if _, ok := ix.find(id, func(e lineage.Event) bool {
 			return e.Action == lineage.Associated && e.Detail["pod"] == ref
-		}); ok && req.Signal.Container == "" {
+		}); ok && c.container == "" {
 			out = append(out, id)
 		}
 	}
 	return out
 }
 
-func (ix *index) answer(req requirements.Requirement, pod *corev1.Pod) (Entry, *Diagnosis) {
-	entry := Entry{Requirement: req.ID, Pod: kube.Ref(pod), Path: []lineage.SignalID{}}
-	srcs := ix.sources(req, pod)
+func (ix *index) answer(c check, pod *corev1.Pod, entry Entry) (Entry, *Diagnosis) {
+	srcs := ix.sources(c, pod)
 	if len(srcs) == 0 {
 		entry.Status, entry.BrokenAt = Unverified, source.Name
-		entry.Reason = "the recording has no " + req.Signal.Metric + " from this pod"
-		if req.Signal.Container != "" {
-			entry.Reason += "'s " + req.Signal.Container + " container"
+		entry.Reason = "the recording has no " + strings.Join(c.metrics, " or ") + " from this pod"
+		if c.container != "" {
+			entry.Reason += "'s " + c.container + " container"
 		}
 		return entry, nil
 	}
 	var fallback *Entry
 	var fallbackDiag *Diagnosis
 	for _, s := range srcs {
-		e, d := ix.answerFrom(req, s, entry)
+		e, d := ix.answerFrom(c, s, entry)
 		if e.Status == Covered || e.Status == CoveredSimulated {
 			return e, nil
 		}
@@ -184,7 +269,7 @@ func (ix *index) answer(req requirements.Requirement, pod *corev1.Pod) (Entry, *
 }
 
 // answerFrom follows one source signal forward.
-func (ix *index) answerFrom(req requirements.Requirement, src lineage.SignalID, entry Entry) (Entry, *Diagnosis) {
+func (ix *index) answerFrom(c check, src lineage.SignalID, entry Entry) (Entry, *Diagnosis) {
 	parent := map[lineage.SignalID]lineage.SignalID{}
 	depth := map[lineage.SignalID]int{src: 0}
 	queue := []lineage.SignalID{src}
@@ -196,8 +281,8 @@ func (ix *index) answerFrom(req requirements.Requirement, src lineage.SignalID, 
 		id := queue[0]
 		queue = queue[1:]
 		visited = append(visited, id)
-		if ix.signals[id].Node == alerts.Prefix+req.MustReach.Alert {
-			if _, ok := ix.routedTo(id, req.MustReach.Receiver); ok {
+		if ix.signals[id].Node == alerts.Prefix+c.alert {
+			if _, ok := ix.routedTo(id, c.receiver); ok {
 				hit = id
 				break
 			}
@@ -224,8 +309,11 @@ func (ix *index) answerFrom(req requirements.Requirement, src lineage.SignalID, 
 
 	if hit != "" {
 		entry.Path = pathTo(hit)
-		routed, _ := ix.routedTo(hit, req.MustReach.Receiver)
+		routed, _ := ix.routedTo(hit, c.receiver)
 		entry.Receiver, _ = routed.Detail["receiver"].(string)
+		if d := ix.missingLabels(c, hit, &entry); d != nil {
+			return entry, d
+		}
 		needed := ix.neededAttributes(entry.Path, routed)
 		for _, id := range entry.Path {
 			for _, e := range ix.events[id] {
@@ -263,9 +351,13 @@ func (ix *index) answerFrom(req requirements.Requirement, src lineage.SignalID, 
 				}
 			}
 		}
-		d := &Diagnosis{Requirement: req.ID, Pod: entry.Pod, Chain: chain,
-			Explanation: fmt.Sprintf("%s fires for this pod, but routing sends it to %s, not %s.", q(req.MustReach.Alert), qs(got), q(req.MustReach.Receiver)),
-			Hints:       []string{"Check the route matchers on the way to " + q(req.MustReach.Receiver) + " against the alert's labels."}}
+		d := &Diagnosis{Requirement: c.requirement, Pod: entry.Pod, Chain: chain,
+			Explanation: fmt.Sprintf("%s fires for this pod, but routing sends it to %s, not %s.", q(c.alert), qs(got), q(c.receiver)),
+			Hints:       []string{"Check the route matchers on the way to " + q(c.receiver) + " against the alert's labels."}}
+		if c.receiver == "" {
+			d.Explanation = fmt.Sprintf("%s fires for this pod, but no route delivers it to a receiver that sends notifications.", q(c.alert))
+			d.Hints = []string{"Check the routes the alert matches, and that their receivers have integrations."}
+		}
 		if len(chain) > 0 {
 			d.RootCause = chain[len(chain)-1]
 		}
@@ -302,7 +394,30 @@ func (ix *index) answerFrom(req requirements.Requirement, src lineage.SignalID, 
 		return entry, nil
 	}
 	entry.Status = NotCovered
-	return entry, ix.diagnose(req, entry, stopEvent)
+	return entry, ix.diagnose(c, entry, stopEvent)
+}
+
+// missingLabels checks that an alert routed to the receiver carries the
+// labels the check requires. If not, the entry is not covered at the alert.
+func (ix *index) missingLabels(c check, alert lineage.SignalID, entry *Entry) *Diagnosis {
+	have := ix.signals[alert].Labels
+	var missing []string
+	for _, l := range c.labels {
+		if have[l] == "" {
+			missing = append(missing, l)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	entry.Status, entry.BrokenAt = NotCovered, alerts.Prefix+c.alert
+	d := &Diagnosis{Requirement: c.requirement, Pod: entry.Pod, MissingLabel: missing[0],
+		Explanation: fmt.Sprintf("%s fires for this pod and reaches %s, but it has no %s label, which the requirement says it must carry.", q(c.alert), q(entry.Receiver), qs(missing)),
+		Hints:       []string{fmt.Sprintf("Keep %s in the alerting rule's expression (for example in its `by (…)`), or set it in the rule's labels.", qs(missing))}}
+	if e, ok := ix.find(alert, func(e lineage.Event) bool { return e.Action == lineage.Derived }); ok {
+		d.Chain, d.RootCause = []string{e.ID}, e.ID
+	}
+	return d
 }
 
 // routedTo finds the routing event delivering an alert to receiver (any
@@ -375,8 +490,8 @@ func (ix *index) neededAttributes(path []lineage.SignalID, routed lineage.Event)
 }
 
 // diagnose traces a drop back to its root cause.
-func (ix *index) diagnose(req requirements.Requirement, entry Entry, drop lineage.Event) *Diagnosis {
-	d := &Diagnosis{Requirement: req.ID, Pod: entry.Pod, Chain: []string{drop.ID}, RootCause: drop.ID}
+func (ix *index) diagnose(c check, entry Entry, drop lineage.Event) *Diagnosis {
+	d := &Diagnosis{Requirement: c.requirement, Pod: entry.Pod, Chain: []string{drop.ID}, RootCause: drop.ID}
 	label := drop.Attribute
 	matcher := ""
 	if reqs, ok := drop.Detail["requires"].(map[string]any); ok {
@@ -390,7 +505,7 @@ func (ix *index) diagnose(req requirements.Requirement, entry Entry, drop lineag
 	}
 	d.MissingLabel = label
 	d.Explanation = fmt.Sprintf("%s only selects series matching %s, and this pod's series has no %s label, so it never reaches %s.",
-		capitalize(where), q(matcher), q(label), q(req.MustReach.Alert))
+		capitalize(where), q(matcher), q(label), q(c.alert))
 
 	// Which resource attribute should have become the label?
 	namer := otlptranslator.LabelNamer{}
@@ -427,12 +542,12 @@ func (ix *index) diagnose(req requirements.Requirement, entry Entry, drop lineag
 	d.Chain = append(d.Chain, root.ID)
 	d.RootCause = root.ID
 	d.Explanation += fmt.Sprintf(", which %s didn't set: %s.", q(root.Node), root.Reason)
-	d.Hints = hints(req, attr, root, matcher, where)
+	d.Hints = hints(c, attr, root, matcher, where)
 	return d
 }
 
-func hints(req requirements.Requirement, attr string, root lineage.Event, matcher, where string) []string {
-	c := req.Signal.Container
+func hints(chk check, attr string, root lineage.Event, matcher, where string) []string {
+	c := chk.container
 	switch {
 	case strings.HasSuffix(root.Node, "k8sattributes") && attr == "k8s.container.name" && c != "":
 		return []string{

@@ -253,6 +253,6 @@ func ReportWithFlow(ctx context.Context, s *Scenario) (*report.Report, flowgraph
 		return nil, flowgraph.Graph{}, fmt.Errorf("requirements: %w", err)
 	}
 	rep := report.Build(s.Name, s.EvalTime, res.Log, reqs, res.pods)
-	rep.Problems = res.Problems
+	rep.Problems = append(res.Problems, rep.Problems...)
 	return rep, res.Flow, nil
 }
