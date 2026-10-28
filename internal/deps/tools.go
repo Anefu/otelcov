@@ -6,6 +6,7 @@
 package deps
 
 import (
+	_ "github.com/distribution/reference"
 	_ "go.opentelemetry.io/collector/pdata/pcommon"
 	_ "go.opentelemetry.io/collector/pdata/plog"
 	_ "go.opentelemetry.io/collector/pdata/pmetric"

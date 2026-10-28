@@ -7,6 +7,8 @@ toolchain go1.24.13
 // Pinned to the collector version the checked collectors run (0.134.x).
 // pdata v1.40.0 ships with collector core and contrib v0.134.0.
 require (
+	// k8sattributes parses container images with it, as upstream does.
+	github.com/distribution/reference v0.6.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.134.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.134.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.134.0
@@ -129,6 +131,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter v0.134.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/pdatautil v0.134.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.134.0 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_golang v1.22.0 // indirect
