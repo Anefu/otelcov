@@ -8,191 +8,200 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottldatapoint"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlresource"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlscope"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ottlfuncs"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/processor"
 
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/unit"
 )
 
-// The statement explainer replays a transform's statements one at a time with
-// the real OTTL library, to say which statement changed what, and which
-// statements didn't run because their condition was false (and what they
-// would have changed). The real processor's output stays the truth; the
-// replay is checked against it.
-
-// runFn executes a statement on a single-data-point item. With editorOnly, the
-// where clause is dropped (to see what the statement would change). It
-// reports whether the condition held.
-type runFn func(ctx context.Context, md pmetric.Metrics, editorOnly bool) (bool, error)
+// The statement explainer says which transform statement changed what, and
+// which statements didn't run because their condition was false, using the
+// real transform processor throughout. For statement i it runs a processor
+// with the statements up to i (the "prefix"): the difference from the prefix
+// before is what statement i did. A statement with a condition that changed
+// nothing runs once more on the data before it, without its condition and its
+// group's conditions: the difference is what it would have changed. That
+// covers every statement the processor accepts, statement groups with
+// conditions, statements without a context block and transform-only
+// functions alike.
 
 type statement struct {
-	context string
+	context string // the group's context; "" when the processor infers it
 	text    string
-	run     runFn
+	// where is the statement's condition: its group's conditions (ORed)
+	// and its where clause. "" when it has none.
+	where      string
+	prefix     processor.Metrics
+	prefixSink *consumertest.MetricsSink
+	// free runs the statement without its condition; nil when it has none.
+	free     processor.Metrics
+	freeSink *consumertest.MetricsSink
+}
+
+// describe names the statement in reasons.
+func (s *statement) describe() string {
+	if s.context == "" {
+		return "statement `" + s.text + "`"
+	}
+	return s.context + " statement `" + s.text + "`"
 }
 
 // effect is what one statement did to one item.
 type effect struct {
-	stmt    statement
-	met     bool
-	err     error
+	stmt    *statement
 	changes []lineage.Event // what it changed
 	would   []lineage.Event // condition false: what it would have changed
 }
 
 type stmtExplainer struct {
-	stmts []statement
-	// incomplete lists why some statements can't be replayed; the replay is
-	// then not checked against the processor's output.
-	incomplete []string
+	stmts []*statement
+	// incomplete is set when the prefix processors couldn't be built; the
+	// changes then aren't attributed to statements.
+	incomplete string
 }
 
-// newTransformExplainer parses a transform processor's metric_statements.
-func newTransformExplainer(raw map[string]any) *stmtExplainer {
+// newTransformExplainer builds the prefix and condition-free processors for a
+// transform processor's metric_statements.
+func newTransformExplainer(ctx context.Context, id string, raw map[string]any) *stmtExplainer {
 	x := &stmtExplainer{}
 	groups, _ := raw["metric_statements"].([]any)
+	with := func(stmts []any) map[string]any {
+		cfg := map[string]any{}
+		for k, v := range raw {
+			cfg[k] = v
+		}
+		cfg["metric_statements"] = stmts
+		return cfg
+	}
+	var done []any // groups before the current one, complete
 	for _, g := range groups {
-		m, ok := g.(map[string]any)
-		if !ok {
-			x.incomplete = append(x.incomplete, "statements without a context block (context inference) aren't replayed yet")
-			continue
-		}
-		ctxName, _ := m["context"].(string)
-		if c, ok := m["conditions"].([]any); ok && len(c) > 0 {
-			x.incomplete = append(x.incomplete, "statement groups with conditions aren't replayed yet")
-			continue
-		}
-		stmts, _ := m["statements"].([]any)
-		for _, s := range stmts {
-			text, _ := s.(string)
-			st, err := compile(ctxName, text)
-			if err != nil {
-				x.incomplete = append(x.incomplete, fmt.Sprintf("statement %q: %v", text, err))
-				continue
+		var texts []string
+		var conds []string
+		group, isGroup := g.(map[string]any)
+		ctxName := ""
+		if isGroup {
+			ctxName, _ = group["context"].(string)
+			for _, c := range asList(group["conditions"]) {
+				conds = append(conds, c)
 			}
-			x.stmts = append(x.stmts, st)
+			texts = asList(group["statements"])
+		} else if text, ok := g.(string); ok {
+			texts = []string{text} // basic config: the context is inferred
 		}
+		for i, text := range texts {
+			s := &statement{context: ctxName, text: text, where: combine(conds, whereClause(text))}
+			var current any = text
+			if isGroup {
+				part := copyMap(group)
+				part["statements"] = toAny(texts[:i+1])
+				current = part
+			}
+			var err error
+			if s.prefix, s.prefixSink, err = build(ctx, id, with(append(append([]any(nil), done...), current))); err != nil {
+				x.incomplete = fmt.Sprintf("statement %q: %v", text, err)
+				return x
+			}
+			if s.where != "" {
+				var free any = editorPart(text)
+				if isGroup {
+					part := copyMap(group)
+					delete(part, "conditions")
+					part["statements"] = []any{editorPart(text)}
+					free = part
+				}
+				// Without its condition a statement may not build (e.g. it
+				// needs the condition's context); then nothing is said about it.
+				s.free, s.freeSink, _ = build(ctx, id, with([]any{free}))
+			}
+			x.stmts = append(x.stmts, s)
+		}
+		done = append(done, g)
 	}
 	return x
 }
 
-// explain replays the statements on a copy of one item. It returns each
-// statement's effect and the replayed result.
-func (x *stmtExplainer) explain(ctx context.Context, item pmetric.Metrics) ([]effect, pmetric.Metrics) {
+// explain runs the statements on a copy of one item. It returns each
+// statement's effect and the result of all statements, or false if the
+// processor didn't return exactly one item at some step (it split, merged or
+// dropped the data), in which case nothing is attributed.
+func (x *stmtExplainer) explain(ctx context.Context, item pmetric.Metrics) ([]effect, pmetric.Metrics, bool) {
+	if x.incomplete != "" {
+		return nil, pmetric.Metrics{}, false
+	}
 	cur := pmetric.NewMetrics()
 	item.CopyTo(cur)
 	var out []effect
 	for _, s := range x.stmts {
-		before := pmetric.NewMetrics()
-		cur.CopyTo(before)
-		met, err := s.run(ctx, cur, false)
-		e := effect{stmt: s, met: met, err: err}
-		if err == nil {
-			if met {
-				e.changes = diff(before, cur)
-			} else {
-				scratch := pmetric.NewMetrics()
-				cur.CopyTo(scratch)
-				if _, werr := s.run(ctx, scratch, true); werr == nil {
-					e.would = diff(cur, scratch)
-				}
+		next, err := runOnce(ctx, s.prefix, s.prefixSink, item)
+		if err != nil || len(next) != 1 {
+			return nil, pmetric.Metrics{}, false
+		}
+		e := effect{stmt: s, changes: diff(cur, next[0])}
+		if len(e.changes) == 0 && s.free != nil {
+			if alt, err := runOnce(ctx, s.free, s.freeSink, cur); err == nil && len(alt) == 1 {
+				e.would = diff(cur, alt[0])
 			}
 		}
 		out = append(out, e)
+		cur = next[0]
 	}
-	return out, cur
+	return out, cur, true
 }
 
-func compile(ctxName, text string) (statement, error) {
-	editor := editorPart(text)
-	set := componenttest.NewNopTelemetrySettings()
-	switch ctxName {
-	case "resource":
-		p, err := ottlresource.NewParser(ottlfuncs.StandardFuncs[ottlresource.TransformContext](), set)
-		if err != nil {
-			return statement{}, err
+func (x *stmtExplainer) shutdown(ctx context.Context) {
+	for _, s := range x.stmts {
+		_ = s.prefix.Shutdown(ctx)
+		if s.free != nil {
+			_ = s.free.Shutdown(ctx)
 		}
-		full, ed, err := parseBoth(p, text, editor)
-		if err != nil {
-			return statement{}, err
-		}
-		return statement{ctxName, text, func(ctx context.Context, md pmetric.Metrics, editorOnly bool) (bool, error) {
-			rm := md.ResourceMetrics().At(0)
-			_, met, err := pick(full, ed, editorOnly).Execute(ctx, ottlresource.NewTransformContext(rm.Resource(), rm))
-			return met, err
-		}}, nil
-	case "scope":
-		p, err := ottlscope.NewParser(ottlfuncs.StandardFuncs[ottlscope.TransformContext](), set)
-		if err != nil {
-			return statement{}, err
-		}
-		full, ed, err := parseBoth(p, text, editor)
-		if err != nil {
-			return statement{}, err
-		}
-		return statement{ctxName, text, func(ctx context.Context, md pmetric.Metrics, editorOnly bool) (bool, error) {
-			rm := md.ResourceMetrics().At(0)
-			sm := rm.ScopeMetrics().At(0)
-			_, met, err := pick(full, ed, editorOnly).Execute(ctx, ottlscope.NewTransformContext(sm.Scope(), rm.Resource(), sm))
-			return met, err
-		}}, nil
-	case "metric":
-		p, err := ottlmetric.NewParser(ottlfuncs.StandardFuncs[ottlmetric.TransformContext](), set)
-		if err != nil {
-			return statement{}, err
-		}
-		full, ed, err := parseBoth(p, text, editor)
-		if err != nil {
-			return statement{}, err
-		}
-		return statement{ctxName, text, func(ctx context.Context, md pmetric.Metrics, editorOnly bool) (bool, error) {
-			rm := md.ResourceMetrics().At(0)
-			sm := rm.ScopeMetrics().At(0)
-			m := sm.Metrics().At(0)
-			_, met, err := pick(full, ed, editorOnly).Execute(ctx, ottlmetric.NewTransformContext(m, sm.Metrics(), sm.Scope(), rm.Resource(), sm, rm))
-			return met, err
-		}}, nil
-	case "datapoint":
-		p, err := ottldatapoint.NewParser(ottlfuncs.StandardFuncs[ottldatapoint.TransformContext](), set)
-		if err != nil {
-			return statement{}, err
-		}
-		full, ed, err := parseBoth(p, text, editor)
-		if err != nil {
-			return statement{}, err
-		}
-		return statement{ctxName, text, func(ctx context.Context, md pmetric.Metrics, editorOnly bool) (bool, error) {
-			rm := md.ResourceMetrics().At(0)
-			sm := rm.ScopeMetrics().At(0)
-			m := sm.Metrics().At(0)
-			_, met, err := pick(full, ed, editorOnly).Execute(ctx, ottldatapoint.NewTransformContext(dataPoint(m), m, sm.Metrics(), sm.Scope(), rm.Resource(), sm, rm))
-			return met, err
-		}}, nil
 	}
-	return statement{}, fmt.Errorf("context %q isn't replayed yet", ctxName)
 }
 
-func parseBoth[K any](p ottl.Parser[K], text, editor string) (*ottl.Statement[K], *ottl.Statement[K], error) {
-	full, err := p.ParseStatement(text)
-	if err != nil {
-		return nil, nil, err
+// combine describes a statement's condition: its group's conditions, which
+// the processor ORs, and its where clause.
+func combine(conds []string, where string) string {
+	group := strings.Join(conds, " or ")
+	switch {
+	case group == "":
+		return where
+	case where == "":
+		return group
+	case len(conds) > 1:
+		return "(" + group + ") and " + where
+	default:
+		return group + " and " + where
 	}
-	ed, err := p.ParseStatement(editor)
-	if err != nil {
-		ed = nil // the counterfactual just isn't available
-	}
-	return full, ed, nil
 }
 
-func pick[K any](full, editor *ottl.Statement[K], editorOnly bool) *ottl.Statement[K] {
-	if editorOnly && editor != nil {
-		return editor
+func asList(v any) []string {
+	var out []string
+	l, _ := v.([]any)
+	for _, x := range l {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
 	}
-	return full
+	return out
+}
+
+func toAny(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
+}
+
+func copyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // editorPart returns a statement without its where clause, splitting on the

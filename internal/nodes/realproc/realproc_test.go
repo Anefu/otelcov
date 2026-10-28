@@ -170,7 +170,7 @@ func TestStatementExplanations(t *testing.T) {
 		case e.Attribute == "user_id" && e.Action == lineage.Removed:
 			removed = &events[i]
 		case e.Action == lineage.Unverified:
-			t.Errorf("replay should match the processor: %+v", e)
+			t.Errorf("the statement explanation should match the processor: %+v", e)
 		}
 	}
 	if set == nil || !strings.Contains(set.Reason, `"gpu"`) {
@@ -209,26 +209,128 @@ func TestSkippedHiddenWhenAnotherStatementSets(t *testing.T) {
 	}
 }
 
-func TestStatementsThatCantBeReplayed(t *testing.T) {
-	// convert_sum_to_gauge is a transform-processor function, not standard OTTL.
+// eventsFor returns the events about one attribute, by action.
+func eventsFor(events []lineage.Event, attr string) map[lineage.Action]lineage.Event {
+	out := map[lineage.Action]lineage.Event{}
+	for _, e := range events {
+		if e.Attribute == attr {
+			out[e.Action] = e
+		}
+	}
+	return out
+}
+
+func noUnverified(t *testing.T, events []lineage.Event) {
+	t.Helper()
+	for _, e := range events {
+		if e.Action == lineage.Unverified {
+			t.Errorf("the statement explanation should match the processor: %+v", e)
+		}
+	}
+}
+
+// convert_sum_to_gauge is a transform-processor function, not standard OTTL;
+// the statement explainer runs the real processor, so it names the statement
+// like any other.
+func TestTransformOnlyFunction(t *testing.T) {
+	stmt := `convert_sum_to_gauge() where metric.name == "m"`
 	cfg := map[string]any{"metric_statements": []any{
-		map[string]any{"context": "metric", "statements": []any{`convert_sum_to_gauge() where metric.name == "m"`}},
+		map[string]any{"context": "metric", "statements": []any{stmt}},
 	}}
-	n, err := New(context.Background(), "x", "transform", cfg, lineage.NewIDs("c"))
-	if err != nil {
-		t.Fatal(err)
+	_, events, _ := run(t, "transform", cfg, sumItem("s1", "m", pmetric.AggregationTemporalityCumulative, 1, nil, nil))
+	noUnverified(t, events)
+	set, ok := eventsFor(events, "metric.type")[lineage.Set]
+	if !ok || set.Detail["statement"] != stmt || set.Reason != "set by metric statement `"+stmt+"`" {
+		t.Errorf("the conversion should name its statement: %+v", events)
 	}
-	defer n.Shutdown(context.Background())
-	if len(n.stmts.incomplete) != 1 {
-		t.Fatalf("want one statement that can't be replayed, got %v", n.stmts.incomplete)
+}
+
+// A group's conditions apply to all its statements, ORed; a statement the
+// conditions stop is skipped, with the conditions as its where.
+func TestGroupConditions(t *testing.T) {
+	cfg := map[string]any{"metric_statements": []any{
+		map[string]any{
+			"context":    "resource",
+			"conditions": []any{`attributes["k8s.namespace.name"] == "search"`, `attributes["k8s.namespace.name"] == "web"`},
+			"statements": []any{
+				`set(attributes["team"], "frontend")`,
+				`set(attributes["tier"], "cpu") where attributes["tier"] == nil`,
+			},
+		},
+		map[string]any{
+			"context":    "resource",
+			"conditions": []any{`attributes["k8s.namespace.name"] == "inference"`},
+			"statements": []any{`set(attributes["tier"], "gpu")`},
+		},
+	}}
+	_, events, _ := run(t, "transform/team", cfg,
+		sumItem("s1", "m", pmetric.AggregationTemporalityCumulative, 1, nil, map[string]string{"k8s.namespace.name": "inference"}))
+	noUnverified(t, events)
+	team := eventsFor(events, "team")[lineage.Skipped]
+	if team.Detail["would_set"] != "frontend" ||
+		team.Detail["where"] != `attributes["k8s.namespace.name"] == "search" or attributes["k8s.namespace.name"] == "web"` {
+		t.Errorf("team should be skipped by the group's conditions: %+v", events)
 	}
-	out, err := n.ProcessMetrics(context.Background(), []unit.Metric{sumItem("s1", "m", pmetric.AggregationTemporalityCumulative, 1, nil, nil)})
-	if err != nil {
-		t.Fatal(err)
+	tier := eventsFor(events, "tier")
+	if tier[lineage.Set].Detail["statement"] != `set(attributes["tier"], "gpu")` {
+		t.Errorf("tier should be set by the second group: %+v", events)
 	}
-	// The real processor still runs; only the statement detail is missing.
-	if !find(out.Events, "s1", "metric.type", lineage.Set) {
-		t.Errorf("the conversion should still show: %+v", out.Events)
+	if _, ok := tier[lineage.Skipped]; ok {
+		t.Errorf("the cpu statement shouldn't be reported: another statement set tier: %+v", events)
+	}
+}
+
+func TestCombine(t *testing.T) {
+	for _, tc := range []struct {
+		conds []string
+		where string
+		want  string
+	}{
+		{nil, "", ""},
+		{nil, "a", "a"},
+		{[]string{"c"}, "", "c"},
+		{[]string{"c"}, "a", "c and a"},
+		{[]string{"c", "d"}, "", "c or d"},
+		{[]string{"c", "d"}, "a", "(c or d) and a"},
+	} {
+		if got := combine(tc.conds, tc.where); got != tc.want {
+			t.Errorf("combine(%q, %q) = %q, want %q", tc.conds, tc.where, got, tc.want)
+		}
+	}
+}
+
+// Statements without a context block (basic config) have their context
+// inferred by the processor; reasons then name only the statement.
+func TestStatementsWithoutContext(t *testing.T) {
+	setTeam := `set(resource.attributes["team"], "search") where resource.attributes["k8s.namespace.name"] == "search"`
+	setTier := `set(resource.attributes["tier"], "gpu") where resource.attributes["k8s.namespace.name"] == "inference"`
+	cfg := map[string]any{"metric_statements": []any{setTeam, setTier}}
+	_, events, _ := run(t, "transform", cfg,
+		sumItem("s1", "m", pmetric.AggregationTemporalityCumulative, 1, nil, map[string]string{"k8s.namespace.name": "inference"}))
+	noUnverified(t, events)
+	tier := eventsFor(events, "tier")[lineage.Set]
+	if tier.Reason != "set by statement `"+setTier+"`" || tier.Detail["context"] != nil {
+		t.Errorf("tier should be set by its statement, with no context: %+v", tier)
+	}
+	team := eventsFor(events, "team")[lineage.Skipped]
+	if team.Detail["would_set"] != "search" || team.Reason != "statement `"+setTeam+"` didn't run: its condition is false for this signal" {
+		t.Errorf("team should be skipped: %+v", team)
+	}
+}
+
+// A later statement that reads what an earlier one set sees it, as in the
+// processor.
+func TestStatementsSeeEarlierChanges(t *testing.T) {
+	cfg := map[string]any{"metric_statements": []any{
+		map[string]any{"context": "resource", "statements": []any{
+			`set(attributes["team"], "inference")`,
+			`set(attributes["pager"], "inference-pager") where attributes["team"] == "inference"`,
+		}},
+	}}
+	_, events, _ := run(t, "transform", cfg, sumItem("s1", "m", pmetric.AggregationTemporalityCumulative, 1, nil, nil))
+	noUnverified(t, events)
+	if !strings.Contains(eventsFor(events, "pager")[lineage.Set].Reason, `"inference-pager"`) {
+		t.Errorf("pager should be set by the second statement: %+v", events)
 	}
 }
 

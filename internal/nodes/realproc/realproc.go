@@ -83,18 +83,39 @@ type Node struct {
 // IDs for signals the processor creates.
 func New(ctx context.Context, name, id string, raw map[string]any, ids *lineage.IDs) (*Node, error) {
 	typ := collector.Type(id)
-	f, ok := factories[typ]
+	proc, sink, err := build(ctx, id, raw)
+	if err != nil {
+		return nil, err
+	}
+	n := &Node{name: name, typ: typ, proc: proc, sink: sink, byMetric: byMetric[typ], ids: ids}
+	if typ == "metricstransform" && usesCombine(raw) {
+		n.uncertain = "metricstransform's combine merges different metrics, which needs a batch unit; not supported yet"
+	}
+	switch typ {
+	case "transform":
+		n.stmts = newTransformExplainer(ctx, id, raw)
+	case "filter":
+		n.filter = newFilterExplainer(raw)
+	}
+	return n, nil
+}
+
+// build creates and starts the real processor for component ID id (e.g.
+// "transform/fix") with its raw collector config. Its output goes to the
+// returned sink.
+func build(ctx context.Context, id string, raw map[string]any) (processor.Metrics, *consumertest.MetricsSink, error) {
+	f, ok := factories[collector.Type(id)]
 	if !ok {
-		return nil, fmt.Errorf("processor type %s doesn't run as real code yet", typ)
+		return nil, nil, fmt.Errorf("processor type %s doesn't run as real code yet", collector.Type(id))
 	}
 	cfg := f.CreateDefaultConfig()
 	if raw != nil {
 		if err := confmap.NewFromStringMap(raw).Unmarshal(cfg); err != nil {
-			return nil, fmt.Errorf("%s config: %w", id, err)
+			return nil, nil, fmt.Errorf("%s config: %w", id, err)
 		}
 	}
 	if err := xconfmap.Validate(cfg); err != nil {
-		return nil, fmt.Errorf("%s config: %w", id, err)
+		return nil, nil, fmt.Errorf("%s config: %w", id, err)
 	}
 	set := processortest.NewNopSettings(f.Type())
 	if _, n, found := strings.Cut(id, "/"); found {
@@ -103,28 +124,39 @@ func New(ctx context.Context, name, id string, raw map[string]any, ids *lineage.
 	sink := new(consumertest.MetricsSink)
 	proc, err := f.CreateMetrics(ctx, set, cfg, sink)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", id, err)
+		return nil, nil, fmt.Errorf("%s: %w", id, err)
 	}
 	if err := proc.Start(ctx, componenttest.NewNopHost()); err != nil {
-		return nil, fmt.Errorf("%s: start: %w", id, err)
+		return nil, nil, fmt.Errorf("%s: start: %w", id, err)
 	}
-	n := &Node{name: name, typ: typ, proc: proc, sink: sink, byMetric: byMetric[typ], ids: ids}
-	if typ == "metricstransform" && usesCombine(raw) {
-		n.uncertain = "metricstransform's combine merges different metrics, which needs a batch unit; not supported yet"
+	return proc, sink, nil
+}
+
+// runOnce feeds md to a processor and returns its output, one item per data
+// point.
+func runOnce(ctx context.Context, proc processor.Metrics, sink *consumertest.MetricsSink, md pmetric.Metrics) ([]pmetric.Metrics, error) {
+	in := pmetric.NewMetrics()
+	md.CopyTo(in)
+	sink.Reset()
+	if err := proc.ConsumeMetrics(ctx, in); err != nil {
+		return nil, err
 	}
-	switch typ {
-	case "transform":
-		n.stmts = newTransformExplainer(raw)
-	case "filter":
-		n.filter = newFilterExplainer(raw)
+	var out []pmetric.Metrics
+	for _, m := range sink.AllMetrics() {
+		out = append(out, unit.SplitMetrics(m)...)
 	}
-	return n, nil
+	return out, nil
 }
 
 func (n *Node) Name() string { return n.name }
 
-// Shutdown stops the processor.
-func (n *Node) Shutdown(ctx context.Context) error { return n.proc.Shutdown(ctx) }
+// Shutdown stops the processor, and those the statement explainer runs.
+func (n *Node) Shutdown(ctx context.Context) error {
+	if n.stmts != nil {
+		n.stmts.shutdown(ctx)
+	}
+	return n.proc.Shutdown(ctx)
+}
 
 func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Output, error) {
 	var groups [][]unit.Metric
@@ -515,31 +547,34 @@ func usesCombine(raw map[string]any) bool {
 }
 
 // explainChanges compares an item before and after the processor. For
-// transform, each change names the statement that made it, statements whose
-// condition was false report what they would have changed (skipped), and the
-// replay is checked against the processor's real output.
+// transform, each change names the statement that made it, a statement that
+// changed nothing but would have without its condition reports what it would
+// have changed (skipped), and the explanation is checked against the
+// processor's real output for this item.
 func (n *Node) explainChanges(ctx context.Context, before, after pmetric.Metrics) []lineage.Event {
 	changes := diff(before, after)
+	for i := range changes {
+		changes[i].Reason = "changed by the " + n.typ + " processor"
+	}
 	if n.stmts == nil {
-		for i := range changes {
-			changes[i].Reason = "changed by the " + n.typ + " processor"
-		}
 		return changes
 	}
-	effects, replayed := n.stmts.explain(ctx, before)
+	effects, final, ok := n.stmts.explain(ctx, before)
+	if !ok {
+		return changes
+	}
 	key := func(e lineage.Event) string {
 		level, _ := e.Detail["level"].(string)
 		return level + "|" + e.Attribute
 	}
 	changed := map[string]bool{}
 	for i := range changes {
-		changes[i].Reason = "changed by the " + n.typ + " processor"
 		k := key(changes[i])
 		changed[k] = true
 		for _, ef := range effects { // the last statement to touch it wins
 			for _, c := range ef.changes {
 				if key(c) == k {
-					changes[i].Reason = "set by " + ef.stmt.context + " statement `" + ef.stmt.text + "`"
+					changes[i].Reason = "set by " + ef.stmt.describe()
 					changes[i].Detail = withStatement(changes[i].Detail, ef.stmt)
 				}
 			}
@@ -553,7 +588,7 @@ func (n *Node) explainChanges(ctx context.Context, before, after pmetric.Metrics
 			}
 			d := withStatement(w.Detail, ef.stmt)
 			d["condition"] = false
-			d["where"] = whereClause(ef.stmt.text)
+			d["where"] = ef.stmt.where
 			if w.Action == lineage.Set {
 				d["would_set"] = w.Value
 			} else {
@@ -561,29 +596,25 @@ func (n *Node) explainChanges(ctx context.Context, before, after pmetric.Metrics
 			}
 			out = append(out, lineage.Event{
 				Attribute: w.Attribute, Action: lineage.Skipped, Detail: d,
-				Reason: ef.stmt.context + " statement `" + ef.stmt.text + "` didn't run: its condition is false for this signal",
+				Reason: ef.stmt.describe() + " didn't run: its condition is false for this signal",
 			})
 		}
-		if ef.err != nil {
-			out = append(out, lineage.Event{Action: lineage.Unverified, Detail: withStatement(nil, ef.stmt),
-				Reason: "replaying " + ef.stmt.context + " statement `" + ef.stmt.text + "` failed: " + ef.err.Error()})
-		}
 	}
-	if len(n.stmts.incomplete) == 0 {
-		if mismatch := diff(replayed, after); len(mismatch) > 0 {
-			out = append(out, lineage.Event{Action: lineage.Unverified,
-				Reason: "the statement-by-statement replay doesn't match the transform processor's output, so statement details may be wrong"})
-		}
+	if mismatch := diff(final, after); len(mismatch) > 0 {
+		out = append(out, lineage.Event{Action: lineage.Unverified,
+			Reason: "the transform processor changed this data point differently when it ran on the whole metric, so statement details may be wrong"})
 	}
 	return out
 }
 
-func withStatement(d map[string]any, s statement) map[string]any {
+func withStatement(d map[string]any, s *statement) map[string]any {
 	out := map[string]any{}
 	for k, v := range d {
 		out[k] = v
 	}
 	out["statement"] = s.text
-	out["context"] = s.context
+	if s.context != "" {
+		out["context"] = s.context
+	}
 	return out
 }
