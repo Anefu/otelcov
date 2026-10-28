@@ -19,7 +19,8 @@ import (
 // Apps what-ifs: a manifest like k8s/apps.yaml with a changed Deployment
 // template (whatif/apps-<name>.yaml). For otelcov to predict its effect from
 // the current recording, the captured pods are rewritten as that template
-// would make them: pods-<name>.yaml next to pods.yaml.
+// would make them: pods-<name>.yaml next to pods.yaml, with the captured
+// namespaces and nodes.
 //
 // Only what the lab's what-ifs change is applied: each container's env and
 // envFrom, and the pod labels. A template that adds, removes or renames
@@ -32,10 +33,11 @@ func writeAppsWhatIfs(dir, glob string) error {
 	if err != nil || len(files) == 0 {
 		return err
 	}
-	pods, _, err := kube.LoadPods(filepath.Join(dir, "pods.yaml"))
+	objs, _, err := kube.Load(filepath.Join(dir, "pods.yaml"))
 	if err != nil {
 		return err
 	}
+	pods := objs.Pods
 	for _, f := range files {
 		deps, err := loadDeployments(f)
 		if err != nil {
@@ -46,11 +48,25 @@ func writeAppsWhatIfs(dir, glob string) error {
 			return fmt.Errorf("%s: %w", f, err)
 		}
 		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "apps-"), ".yaml")
+		// Namespaces and nodes stay as captured.
+		var items []any
+		for _, p := range out {
+			p.APIVersion, p.Kind = "v1", "Pod"
+			items = append(items, p)
+		}
+		for _, n := range objs.Namespaces {
+			n.APIVersion, n.Kind = "v1", "Namespace"
+			items = append(items, n)
+		}
+		for _, n := range objs.Nodes {
+			n.APIVersion, n.Kind = "v1", "Node"
+			items = append(items, n)
+		}
 		b, err := yaml.Marshal(struct {
-			APIVersion string       `json:"apiVersion"`
-			Kind       string       `json:"kind"`
-			Items      []corev1.Pod `json:"items"`
-		}{"v1", "List", out})
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Items      []any  `json:"items"`
+		}{"v1", "List", items})
 		if err != nil {
 			return err
 		}

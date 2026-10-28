@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
+	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/report"
 	"github.com/Anefu/otelcov/internal/scenario"
 )
@@ -124,7 +125,11 @@ func podsYAML() string {
 		pod("vllm-chat-7d4b9c-x1", "otelcov-worker", "10.244.1.5", vllm, "", "vllm") +
 		pod("vllm-embed-5f6a7b-y2", "otelcov-worker2", "10.244.2.7",
 			vllm+"\n        - name: log-shipper\n          image: busybox:1.37",
-			"            - {name: OTEL_RESOURCE_ATTRIBUTES, value: k8s.container.name=vllm}", "vllm", "log-shipper")
+			"            - {name: OTEL_RESOURCE_ATTRIBUTES, value: k8s.container.name=vllm}", "vllm", "log-shipper") +
+		// kubectl get pods,namespaces,nodes lists the namespaces and nodes too.
+		"  - {apiVersion: v1, kind: Namespace, metadata: {name: inference, uid: ns-inference, labels: {kubernetes.io/metadata.name: inference}}}\n" +
+		"  - {apiVersion: v1, kind: Node, metadata: {name: otelcov-worker, uid: node-1, labels: {kubernetes.io/hostname: otelcov-worker}}}\n" +
+		"  - {apiVersion: v1, kind: Node, metadata: {name: otelcov-worker2, uid: node-2, labels: {kubernetes.io/hostname: otelcov-worker2}}}\n"
 }
 
 func write(t *testing.T, path, content string) {
@@ -183,6 +188,18 @@ func TestKindSetup(t *testing.T) {
 	}, start.Add(10*time.Minute))
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// Apps what-ifs keep the captured namespaces and nodes.
+	whatifs, _ := filepath.Glob(filepath.Join(dir, "pods-*.yaml"))
+	if len(whatifs) == 0 {
+		t.Fatal("no apps what-if pods written")
+	}
+	for _, p := range whatifs {
+		objs, _, err := kube.Load(p)
+		if err != nil || len(objs.Pods) != 2 || len(objs.Namespaces) != 1 || len(objs.Nodes) != 2 {
+			t.Errorf("%s: %d pods, %d namespaces, %d nodes, %v", filepath.Base(p), len(objs.Pods), len(objs.Namespaces), len(objs.Nodes), err)
+		}
 	}
 
 	snap, err := scenario.LoadSnapshot(filepath.Join(dir, "snapshot.meta.yaml"))

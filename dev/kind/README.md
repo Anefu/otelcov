@@ -42,7 +42,7 @@ When everything is green, give it about 2 minutes: apps export every 15s, the ru
 
 Then, in the Tilt UI (or `tilt trigger <name>`), run the three manual resources under **otelcov**, in order:
 
-1. **capture** copies each agent's recordings off the cluster, plus the pods and the deployed agent config, into `dev/kind/captured/`. It builds `recording.otlp.jsonl` and `snapshot.meta.yaml`, with resourcedetection values per node, and writes the scenarios from `otelcov/scenarios/` with `eval_time` set to the last recorded timestamp. Each capture replaces the previous one.
+1. **capture** copies each agent's recordings off the cluster, plus the pods, namespaces and nodes (`pods.yaml`, one List) and the deployed agent config, into `dev/kind/captured/`. It builds `recording.otlp.jsonl` and `snapshot.meta.yaml`, with resourcedetection values per node, and writes the scenarios from `otelcov/scenarios/` with `eval_time` set to the last recorded timestamp. Each capture replaces the previous one.
 2. **otelcov** runs all four scenarios on the capture:
    - `01-baseline` (what's deployed): both pods covered.
    - `02-team-pr` (the gateway PR in `whatif/`): both not covered, with the transform statement as the root cause.

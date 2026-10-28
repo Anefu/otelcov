@@ -1,0 +1,32 @@
+# Scenario 06: the agent copies team from the namespace's label, and the
+# gateway runs the PR whose team statement only matches inference-prod.
+version: 1
+collectors:
+  agent:
+    config: collector/agent-namespace-team.yaml
+    sha256: eced735e5c50a2f04e10af17d2a0989e998bf33ed98a5306d06224dbbb5813fd
+    tap: metrics/tap
+  gateway:
+    config: collector/gateway-pr.yaml
+    sha256: c9f9d974eee880417a26e9cac569283f11bd087c3589c06eecf30f3146e67859
+backends:
+  mimir:
+    type: mimir-otlp
+    config: backend/mimir.yaml
+    sha256: 38a3060c209c98e72d0e0a290bab9ad0f1a05d53b6aae06e41fbec23987fc592
+consumers:
+  rules:
+    type: prometheus-rules
+    paths: [rules/inference.rules.yaml]
+    reads: mimir
+  alertmanager:
+    type: alertmanager
+    config: alertmanager/alertmanager.yaml
+    reads: rules
+external:
+  - gateway/exporters/debug
+joins:
+  - from: agent/exporters/otlp/gateway
+    to: gateway/receivers/otlp
+  - from: gateway/exporters/otlphttp/mimir
+    to: mimir

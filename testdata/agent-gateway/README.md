@@ -23,7 +23,7 @@ The rule selects `team="inference"`, and `team` comes from the gateway's `transf
 
 ## Scenarios
 
-All five replay the same recording with different config.
+All six replay the same recording with different config.
 
 | Scenario | Config under test | Expected for both pods |
 |---|---|---|
@@ -32,6 +32,7 @@ All five replay the same recording with different config.
 | `03-bad-join` | agent sends gRPC to the gateway's HTTP port (4318) | unverified: validation can't trust the agent → gateway join; the topology problem is in the report |
 | `04-init-container-pr` | PR adds an `istio-init` init container to vllm-chat | vllm-chat not covered: k8sattributes counts init containers, so it can't name the container (root cause in the diagnosis); vllm-embed still covered |
 | `05-suffixes-off-pr` | PR turns off Mimir's `otel_metric_suffixes_enabled` | not covered: the series arrive as `process_memory_usage`, the rule selects `process_memory_usage_bytes`; root cause Mimir's translation |
+| `06-team-from-namespace-pr` | the agent copies `team` from the namespace's `team` label, and the gateway runs 02's PR | covered: `team` comes from the namespace (`agent/k8sattributes`, "from namespace `inference`'s label `team`"), so the statement no longer matters |
 
 ## Layout
 
@@ -45,6 +46,8 @@ All five replay the same recording with different config.
 | `recordings/staging.meta.yaml` | Snapshot metadata: pod specs and what each resourcedetection processor detected, per node, with its config at recording time |
 | `k8s/pods.yaml` | Pods as the API returns them |
 | `k8s/pods-init-container.yaml` | The same pods, with an init container added to vllm-chat (scenario 04) |
+| `k8s/cluster-namespace-team.yaml` | The same pods and their namespace, labeled `team: inference`, as one List (scenario 06) |
+| `collector/agent-namespace-team.yaml`, `topology-namespace-team.yaml` | The agent with a namespace label rule, and the topology pairing it with `gateway-pr.yaml` (scenario 06) |
 | `backend/mimir.yaml` | Mimir limits: promoted resource attributes (including `team`), suffixes on |
 | `backend/mimir-suffixes-off.yaml`, `topology-suffixes-off.yaml` | The same with suffixes off, for scenario 05 |
 | `rules/`, `alertmanager/` | The rule file and routing tree |
@@ -75,3 +78,4 @@ and update the `sha256` fields, or the report will warn that the topology may be
 - **04 created** (2026-10-28) with the k8sattributes parity fix: vllm-chat not covered, root cause `agent/k8sattributes` ("pod has 2 containers (vllm, istio-init (init container))…"), vllm-embed covered. The other reports didn't change.
 - **Identifiers quoted, one hint for a skipped statement** (02): explanations put identifiers in backticks; the two hints became one that says what to change ("Make the condition `...` in `gateway/transform/team` hold for this pod, or set `team` another way") instead of restating the explanation; the skipped events carry the statement's condition as `detail.where`.
 - **05 created** (2026-10-28) with name-variant near misses (decision 60): both pods not covered at the rule, a `dropped` event on `__name__` ("the selector wants metric \"process_memory_usage_bytes\"; this series is named \"process_memory_usage\", …"), root cause Mimir's `derived` event for the series. Before decision 60 this run gave `unverified` with no diagnosis. The other reports didn't change.
+- **06 created** (2026-10-28) with k8sattributes namespace labels (decision 61): both pods covered, `team` set by `agent/k8sattributes` from the namespace's label; the PR's transform statement leaves no `skipped` event, since running it without its condition changes nothing. The other reports didn't change: the fixtures' k8sattributes configs list only attributes that were already modeled.

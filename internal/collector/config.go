@@ -48,15 +48,23 @@ func Load(path string) (*Config, error) {
 // does.
 var envRef = regexp.MustCompile(`\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
 
+// expansion matches what the resolver expands: $$, its escape for a literal
+// $, and env references.
+var expansion = regexp.MustCompile(`\$\$|` + envRef.String())
+
 // LoadWithEnv reads a collector config, replacing ${env:VAR} and ${VAR}
-// references with values from env (or their :-default). References without a
-// value stay as written, so checks that depend on them can say so.
+// references with values from env (or their :-default), and $$ with $.
+// References without a value stay as written, so checks that depend on them
+// can say so.
 func LoadWithEnv(path string, env map[string]string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	data = envRef.ReplaceAllFunc(data, func(m []byte) []byte {
+	data = expansion.ReplaceAllFunc(data, func(m []byte) []byte {
+		if string(m) == "$$" {
+			return []byte("$")
+		}
 		sub := envRef.FindSubmatch(m)
 		if v, ok := env[string(sub[1])]; ok {
 			return []byte(v)

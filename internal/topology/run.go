@@ -10,6 +10,7 @@ import (
 
 	"github.com/Anefu/otelcov/internal/collector"
 	"github.com/Anefu/otelcov/internal/graph"
+	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/nodes/k8sattributes"
 	"github.com/Anefu/otelcov/internal/nodes/realproc"
@@ -22,8 +23,9 @@ const CopyNode = "topology"
 
 // Inputs are what a run needs besides the topology.
 type Inputs struct {
-	// Pods in the config under test (k8sattributes looks them up).
-	Pods []corev1.Pod
+	// Cluster is the config under test's pods, namespaces and nodes
+	// (k8sattributes looks them up).
+	Cluster kube.Objects
 	// SnapshotPods were running at recording time.
 	SnapshotPods []corev1.Pod
 	// ResourceDetection holds recorded detections per collector, then
@@ -224,7 +226,7 @@ func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw m
 		// They only regroup or shed load; they don't change data.
 		return graph.PassThrough{NodeName: name}
 	case typ == "k8sattributes":
-		n, err := k8sattributes.New(name, raw, r.in.Pods)
+		n, err := k8sattributes.New(name, raw, r.in.Cluster)
 		if err != nil {
 			return graph.Unsupported{NodeName: name, Reason: err.Error()}
 		}

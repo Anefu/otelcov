@@ -1,0 +1,63 @@
+# Scenario 06: the pods of pods.yaml, and their namespace, which carries the
+# owning team as a label (as `kubectl get pods,namespaces -o yaml` lists them).
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: Pod
+    metadata:
+      name: vllm-chat-6f9d8b7c4d-k2x7p
+      namespace: inference
+      uid: 3f6c2a9e-8b1d-4c57-9e2a-1d7b5c4e8f01
+      labels:
+        app.kubernetes.io/name: vllm
+        pod-template-hash: 6f9d8b7c4d
+      ownerReferences:
+        - {apiVersion: apps/v1, kind: ReplicaSet, name: vllm-chat-6f9d8b7c4d, uid: 0b7e1c55-4a2d-4f0e-9c3b-71a2d6e8f9c0, controller: true}
+    spec:
+      nodeName: kind-worker
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.10.2
+          env:
+            - {name: OTEL_SERVICE_NAME, value: vllm}
+    status:
+      phase: Running
+      podIP: 10.244.1.11
+      containerStatuses:
+        - {name: vllm, containerID: "containerd://aa11", ready: true, restartCount: 0}
+  - apiVersion: v1
+    kind: Pod
+    metadata:
+      name: vllm-embed-5c8b9d6f7b-q4m9t
+      namespace: inference
+      uid: 9a1e4d7c-2f6b-4b83-a5c9-6e0d2b8f7a42
+      labels:
+        app.kubernetes.io/name: vllm
+        pod-template-hash: 5c8b9d6f7b
+      ownerReferences:
+        - {apiVersion: apps/v1, kind: ReplicaSet, name: vllm-embed-5c8b9d6f7b, uid: 6d2f8a14-9b3e-4c71-8e5a-c40f3b9d2e17, controller: true}
+    spec:
+      nodeName: kind-worker2
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.10.2
+          env:
+            - {name: OTEL_SERVICE_NAME, value: vllm}
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: k8s.container.name=vllm}
+        - name: log-shipper
+          image: fluent/fluent-bit:4.0
+    status:
+      phase: Running
+      podIP: 10.244.2.12
+      containerStatuses:
+        - {name: vllm, containerID: "containerd://bb22", ready: true, restartCount: 0}
+        - {name: log-shipper, containerID: "containerd://bb33", ready: true, restartCount: 0}
+  - apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: inference
+      uid: 5d1f0c3a-7e2b-4c8d-9a6f-2b4e8c1d7f30
+      labels:
+        kubernetes.io/metadata.name: inference
+        team: inference

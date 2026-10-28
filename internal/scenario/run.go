@@ -53,23 +53,25 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	}
 	var problems []topology.Problem
 	warned := map[string]bool{}
-	loadPods := func(path string) ([]corev1.Pod, error) {
-		pods, unknown, err := kube.LoadPods(path)
+	load := func(path string) (kube.Objects, error) {
+		objs, unknown, err := kube.Load(path)
 		if err == nil && len(unknown) > 0 && !warned[path] {
 			warned[path] = true
 			problems = append(problems, topology.Problem{Severity: topology.Warning, Where: s.Rel(path),
 				Message: fmt.Sprintf("fields the Kubernetes %s API types in otelcov don't know were ignored: %s", kube.APIVersion, strings.Join(unknown, ", "))})
 		}
-		return pods, err
+		return objs, err
 	}
-	snapPods, err := loadPods(snap.Pods)
+	snapObjs, err := load(snap.Pods)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot pods: %w", err)
 	}
-	pods, err := loadPods(s.Config.Pods)
+	snapPods := snapObjs.Pods
+	cluster, err := load(s.Config.Pods)
 	if err != nil {
 		return nil, fmt.Errorf("pods: %w", err)
 	}
+	pods := cluster.Pods
 	topo, err := topology.Load(s.Config.Topology)
 	if err != nil {
 		return nil, err
@@ -96,7 +98,7 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		return nil, err
 	}
 
-	runner, err := topology.NewRunner(topo, val, topology.Inputs{Pods: pods, SnapshotPods: snapPods, ResourceDetection: snap.ResourceDetection}, log)
+	runner, err := topology.NewRunner(topo, val, topology.Inputs{Cluster: cluster, SnapshotPods: snapPods, ResourceDetection: snap.ResourceDetection}, log)
 	if err != nil {
 		return nil, err
 	}

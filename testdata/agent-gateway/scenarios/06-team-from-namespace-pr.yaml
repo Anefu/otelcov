@@ -1,0 +1,17 @@
+# The agent copies team from the namespace's team label (k8sattributes), and
+# the gateway runs scenario 02's PR, whose team statement no longer matches.
+# team still reaches the rule, from the namespace.
+name: 06-team-from-namespace-pr
+description: "The agent takes team from the namespace's label, and a PR makes the gateway's team statement match namespace inference-prod."
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  recording: ../recordings/staging.otlp.jsonl
+  snapshot: ../recordings/staging.meta.yaml
+
+config:
+  pods: ../k8s/cluster-namespace-team.yaml
+  topology: ../topology-namespace-team.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/06-team-from-namespace-pr.report.json

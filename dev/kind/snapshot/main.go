@@ -5,7 +5,7 @@
 //
 //	tap/<node>.jsonl       each agent's raw input (metrics/tap)
 //	detected/<node>.jsonl  the same input after resourcedetection/capture (metrics/detected)
-//	pods.yaml              the pods that ran
+//	pods.yaml              the pods that ran, with the namespaces and nodes
 //
 // and writes, in -dir:
 //

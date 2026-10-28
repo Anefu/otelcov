@@ -1,0 +1,61 @@
+# Scenario 06: the agent as deployed, plus team copied from the namespace's
+# team label, so ownership no longer depends on the gateway's statement.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  k8sattributes:
+    auth_type: serviceAccount
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.ip
+      - sources:
+          - from: connection
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.node.name
+        - k8s.container.name
+      labels:
+        - tag_name: team
+          key: team
+          from: namespace
+  resourcedetection:
+    detectors: [env, system]
+    override: false
+  resource:
+    attributes:
+      - key: k8s.cluster.name
+        value: kind-otelcov
+        action: upsert
+  batch: {}
+  k8sattributes/tap:
+    passthrough: true
+
+exporters:
+  otlp/gateway:
+    endpoint: otel-gateway.observability.svc.cluster.local:4317
+    tls:
+      insecure: true
+  file/tap:
+    path: /var/lib/otel-tap/metrics.otlp.jsonl
+    format: json
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [k8sattributes, resourcedetection, resource, batch]
+      exporters: [otlp/gateway]
+    metrics/tap:
+      receivers: [otlp]
+      processors: [k8sattributes/tap]
+      exporters: [file/tap]

@@ -7,13 +7,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/nodes/nodetest"
 )
 
 func node(t *testing.T, raw map[string]any, pods ...corev1.Pod) *Node {
 	t.Helper()
-	n, err := New("collector/k8sattributes", raw, pods)
+	n, err := New("collector/k8sattributes", raw, kube.Objects{Pods: pods})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,9 +42,9 @@ func TestContainerIdentification(t *testing.T) {
 	if e, ok := nodetest.Find(out.Events, "container.id", lineage.Kept); !ok || e.Value != "id-web-7d9f-x-sidecar" {
 		t.Errorf("container.id should be kept: %+v", out.Events)
 	}
-	// Attributes the node doesn't model are unverified, not guessed.
-	if _, ok := nodetest.Find(out.Events, "k8s.pod.start_time", lineage.Unverified); !ok {
-		t.Errorf("start_time should be unverified: %+v", out.Events)
+	// A pod without a creation time gets no start time.
+	if e, ok := nodetest.Find(out.Events, "k8s.pod.start_time", lineage.Skipped); !ok || e.Reason != "the pod has no `creationTimestamp`" {
+		t.Errorf("start_time should be skipped: %+v", out.Events)
 	}
 
 	// Without either, a multi-container pod can't name the container.
@@ -97,7 +98,7 @@ func TestPassthroughAndUnknownConfig(t *testing.T) {
 		t.Errorf("passthrough should change nothing: %+v", out.Events)
 	}
 
-	if _, err := New("x", map[string]any{"filter": map[string]any{"namespace": "a"}}, nil); err == nil {
+	if _, err := New("x", map[string]any{"filter": map[string]any{"namespace": "a"}}, kube.Objects{}); err == nil {
 		t.Error("unmodeled settings must be rejected, not ignored")
 	}
 }
