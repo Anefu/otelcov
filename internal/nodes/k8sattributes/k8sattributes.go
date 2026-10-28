@@ -23,6 +23,7 @@ package k8sattributes
 import (
 	"context"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -43,9 +44,31 @@ import (
 type Config struct {
 	Passthrough    bool              `json:"passthrough"`
 	AuthType       string            `json:"auth_type"`
+	Context        string            `json:"context"`
 	PodAssociation []AssociationRule `json:"pod_association"`
 	Extract        Extract           `json:"extract"`
+	Exclude        Exclude           `json:"exclude"`
+	// The wait settings only delay the collector's start until its pod
+	// cache is synced; a replay knows every pod from the start.
+	WaitForMetadata        bool `json:"wait_for_metadata"`
+	WaitForMetadataTimeout any  `json:"wait_for_metadata_timeout"`
 }
+
+// Exclude lists pods the processor ignores, by name regex.
+type Exclude struct {
+	Pods []struct {
+		Name string `json:"name"`
+	} `json:"pods"`
+}
+
+// defaultExcludes apply when exclude.pods is empty (factory.go, options.go).
+var defaultExcludes = []string{"jaeger-agent", "jaeger-collector"}
+
+// ignoreAnnotation makes the processor ignore a pod (client.go).
+const ignoreAnnotation = "opentelemetry.io/k8s-processor/ignore"
+
+// authTypes are the auth_type values the processor accepts (k8sconfig).
+var authTypes = map[string]bool{"none": true, "serviceAccount": true, "kubeConfig": true, "tls": true}
 
 // Extract says which attributes to add.
 type Extract struct {
@@ -103,21 +126,16 @@ var containerKeys = map[string]bool{
 	"container.image.repo_digests": true, "service.instance.id": true, "service.version": true,
 }
 
-// defaultAssociation is used when pod_association is not set.
-var defaultAssociation = []AssociationRule{
-	{Sources: []Source{{From: "resource_attribute", Name: "k8s.pod.ip"}}},
-	{Sources: []Source{{From: "resource_attribute", Name: "k8s.pod.uid"}}},
-	{Sources: []Source{{From: "connection"}}},
-}
-
 // Node is the k8sattributes node.
 type Node struct {
 	name     string
 	cfg      Config
 	metadata map[string]bool
 	rules    []rule
-	pods     *kube.Pods
+	exclude  []*regexp.Regexp
 	objs     kube.Objects
+	// index maps pod identifiers (see podIdentifiers) to pods.
+	index map[string]*corev1.Pod
 }
 
 // New builds the node from the processor's raw config and the cluster's
@@ -127,13 +145,40 @@ func New(name string, raw map[string]any, objs kube.Objects) (*Node, error) {
 	if err := collector.Decode(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("unsupported k8sattributes config: %w", err)
 	}
-	if len(cfg.PodAssociation) == 0 {
-		cfg.PodAssociation = defaultAssociation
-	}
 	if cfg.Extract.Metadata == nil {
 		cfg.Extract.Metadata = defaultMetadata
 	}
-	n := &Node{name: name, cfg: cfg, metadata: map[string]bool{}, pods: kube.NewPods(objs.Pods), objs: objs}
+	if cfg.AuthType == "" {
+		cfg.AuthType = "serviceAccount"
+	}
+	if !authTypes[cfg.AuthType] {
+		return nil, fmt.Errorf("k8sattributes config: invalid authType for kubernetes: %s", cfg.AuthType)
+	}
+	for _, a := range cfg.PodAssociation {
+		if len(a.Sources) > 4 {
+			return nil, fmt.Errorf("k8sattributes config: too many association sources. limit is 4")
+		}
+		for _, src := range a.Sources {
+			if src.From != "connection" && src.From != "resource_attribute" {
+				return nil, fmt.Errorf("unsupported k8sattributes config: pod_association source from %q", src.From)
+			}
+		}
+	}
+	n := &Node{name: name, cfg: cfg, metadata: map[string]bool{}, objs: objs}
+	names := defaultExcludes
+	if len(cfg.Exclude.Pods) > 0 {
+		names = nil
+		for _, p := range cfg.Exclude.Pods {
+			names = append(names, p.Name)
+		}
+	}
+	for _, name := range names {
+		re, err := regexp.Compile(name)
+		if err != nil {
+			return nil, fmt.Errorf("k8sattributes config: exclude: %w", err)
+		}
+		n.exclude = append(n.exclude, re)
+	}
 	for _, k := range cfg.Extract.Metadata {
 		if !supportedMetadata[k] {
 			return nil, fmt.Errorf("k8sattributes config: %q is not a supported metadata field", k)
@@ -144,6 +189,7 @@ func New(name string, raw map[string]any, objs kube.Objects) (*Node, error) {
 	if n.rules, err = compileRules(cfg.Extract); err != nil {
 		return nil, err
 	}
+	n.indexPods()
 	return n, nil
 }
 
@@ -169,34 +215,35 @@ func (n *Node) process(it unit.Metric) []lineage.Event {
 		e.Node, e.Signal = n.name, it.ID
 		events = append(events, e)
 	}
-	str := func(k string) (string, bool) {
-		v, ok := attrs.Get(k)
-		if !ok {
-			return "", false
-		}
-		return v.AsString(), true
-	}
 
 	ps := newProposals(n.cfg.Extract.Metadata)
-	pod, via := n.associate(str)
+	// view is the resource as each stage sees it: the processor reads the
+	// container's name and ID, and the node name, after the earlier stages
+	// wrote theirs.
+	view := pcommon.NewMap()
+	attrs.CopyTo(view)
+	pod := n.associate(attrs, emit)
 	var id identified
-	if pod == nil {
-		emit(lineage.Event{Action: lineage.Skipped, Reason: "no pod matched the pod_association rules, so no attributes were added"})
-	} else {
-		emit(lineage.Event{Action: lineage.Associated, Detail: map[string]any{"pod": kube.Ref(pod), "via": via}})
-		id = identifyContainer(pod, attrs, n.specNames())
+	if pod != nil {
 		n.podStage(ps, pod)
-		n.containerStage(ps, pod, id, attrs)
+		ps.apply(view, stagePod)
+		id = identifyContainer(pod, view, n.specNames())
+		n.containerStage(ps, pod, id, view)
+		ps.apply(view, stageContainer)
 	}
+	// The processor keeps a pod's namespace, but its node name only when
+	// k8s.node.name is extracted (removeUnnecessaryPodData); otherwise the
+	// resource's counts.
 	ns := stringAttr(attrs, "k8s.namespace.name")
 	if pod != nil {
 		ns = pod.Namespace
 	}
 	if ns != "" {
 		n.namespaceStage(ps, ns)
+		ps.apply(view, stageNamespace)
 	}
-	node := stringAttr(attrs, "k8s.node.name")
-	if pod != nil && pod.Spec.NodeName != "" {
+	node := stringAttr(view, "k8s.node.name")
+	if pod != nil && n.metadata["k8s.node.name"] && pod.Spec.NodeName != "" {
 		node = pod.Spec.NodeName
 	}
 	if node != "" {
@@ -207,6 +254,209 @@ func (n *Node) process(it unit.Metric) []lineage.Event {
 		emit(e)
 	}
 	return events
+}
+
+// associate finds the pod the resource belongs to, as the processor does:
+// the first pod_association rule whose attributes the resource has gives the
+// identifier, and only a pod with that identifier matches (pod_association.go,
+// extractPodID; client.go, GetPod). Ignored pods don't match.
+func (n *Node) associate(attrs pcommon.Map, emit func(lineage.Event)) *corev1.Pod {
+	key, via, ok := n.podID(attrs)
+	if !ok {
+		emit(lineage.Event{Action: lineage.Skipped,
+			Reason: "the resource has no value for any pod_association rule (a replay has no connection address), so no pod was looked up and no pod attributes were added"})
+		return nil
+	}
+	pod, found := n.index[key]
+	if !found {
+		emit(lineage.Event{Action: lineage.Skipped, Reason: "no pod matches " + via + ", so no pod attributes were added"})
+		return nil
+	}
+	if why := n.ignored(pod); why != "" {
+		emit(lineage.Event{Action: lineage.Skipped, Detail: map[string]any{"pod": kube.Ref(pod), "via": via},
+			Reason: "pod " + kube.Ref(pod) + " matches, but the processor ignores it: " + why + ", so no pod attributes were added"})
+		return nil
+	}
+	emit(lineage.Event{Action: lineage.Associated, Detail: map[string]any{"pod": kube.Ref(pod), "via": via}})
+	return pod
+}
+
+// podID is the processor's pod identifier for a resource: the first
+// pod_association rule whose sources all have a value (a replay has no
+// connection address), or without rules, k8s.pod.ip, ip or an IP in
+// host.name, looked up as the connection address.
+func (n *Node) podID(attrs pcommon.Map) (key, via string, ok bool) {
+	if len(n.cfg.PodAssociation) == 0 {
+		for _, k := range []string{"k8s.pod.ip", "ip"} {
+			if v := stringAttr(attrs, k); v != "" {
+				return idKey([]string{connectionPart(v)}), k + "=" + v + " (as the connection address, since pod_association isn't set)", true
+			}
+		}
+		if h := stringAttr(attrs, "host.name"); net.ParseIP(h) != nil {
+			return idKey([]string{connectionPart(h)}), "host.name=" + h + " (as the connection address, since pod_association isn't set)", true
+		}
+		return "", "", false
+	}
+rules:
+	for _, rule := range n.cfg.PodAssociation {
+		parts := make([]string, len(rule.Sources))
+		vias := make([]string, len(rule.Sources))
+		for i, src := range rule.Sources {
+			if src.From == "connection" {
+				continue rules
+			}
+			v := stringAttr(attrs, src.Name)
+			if v == "" {
+				continue rules
+			}
+			parts[i], vias[i] = attrPart(src.Name, v), "resource_attribute "+src.Name+"="+v
+		}
+		return idKey(parts), strings.Join(vias, " + "), true
+	}
+	return "", "", false
+}
+
+func idKey(parts []string) string     { return strings.Join(parts, "\x00") }
+func connectionPart(ip string) string { return "connection|" + ip }
+func attrPart(name, v string) string  { return "resource_attribute|" + name + "=" + v }
+
+// indexPods stores each pod under its identifiers (client.go,
+// getIdentifiersFromAssoc, addOrUpdatePod): one per pod_association rule the
+// pod has values for, plus its UID and, unless it uses the host network, its
+// IP. When pods share an identifier, the one that started later wins.
+func (n *Node) indexPods() {
+	n.index = map[string]*corev1.Pod{}
+	for i := range n.objs.Pods {
+		pod := &n.objs.Pods[i]
+		for _, k := range n.podIdentifiers(pod) {
+			if old, ok := n.index[k]; ok && pod.Status.StartTime.Before(old.Status.StartTime) {
+				continue
+			}
+			n.index[k] = pod
+		}
+	}
+}
+
+func (n *Node) podIdentifiers(pod *corev1.Pod) []string {
+	addr := pod.Status.PodIP
+	var tags map[string]string // the pod's attributes, for other source names
+	var ids []string
+	for _, rule := range n.cfg.PodAssociation {
+		parts := make([]string, len(rule.Sources))
+		cidPos, skip := -1, false
+		for i, src := range rule.Sources {
+			if src.From == "connection" {
+				if addr == "" || pod.Spec.HostNetwork {
+					skip = true
+				}
+				parts[i] = connectionPart(addr)
+				continue
+			}
+			v := ""
+			switch src.Name {
+			case "k8s.namespace.name":
+				v = pod.Namespace
+			case "k8s.pod.name":
+				v = pod.Name
+			case "k8s.pod.uid":
+				v = string(pod.UID)
+			case "host.name", "k8s.pod.ip":
+				v = addr
+			case "container.id":
+				cidPos = i
+			default:
+				if tags == nil {
+					tags = n.podTags(pod)
+				}
+				v = tags[src.Name]
+			}
+			if v == "" && cidPos == -1 {
+				skip = true
+			}
+			parts[i] = attrPart(src.Name, v)
+		}
+		switch {
+		case skip:
+		case cidPos >= 0:
+			// One identifier per container ID, if the processor keeps
+			// containers at all.
+			if n.ignored(pod) == "" && n.needContainers() {
+				for _, st := range allStatuses(pod) {
+					cp := append([]string(nil), parts...)
+					cp[cidPos] = attrPart("container.id", runtimeID(st.ContainerID))
+					ids = append(ids, idKey(cp))
+				}
+			}
+		default:
+			ids = append(ids, idKey(parts))
+		}
+	}
+	if pod.UID != "" {
+		ids = append(ids, idKey([]string{attrPart("k8s.pod.uid", string(pod.UID))}))
+	}
+	if addr != "" && !pod.Spec.HostNetwork {
+		ids = append(ids, idKey([]string{connectionPart(addr)}), idKey([]string{attrPart("k8s.pod.ip", addr)}))
+	}
+	return ids
+}
+
+// podTags are the pod's attributes as the processor stores them, for
+// pod_association sources on other attributes. An ignored pod has none.
+func (n *Node) podTags(pod *corev1.Pod) map[string]string {
+	out := map[string]string{}
+	if n.ignored(pod) != "" {
+		return out
+	}
+	ps := newProposals(nil)
+	n.podStage(ps, pod)
+	for k, list := range ps.by {
+		for _, p := range list {
+			if p.act == actWrite {
+				out[k] = p.value
+			}
+		}
+	}
+	return out
+}
+
+// ignored says why the processor ignores a pod, or "" (client.go,
+// shouldIgnorePod): the ignore annotation, which only counts when the
+// processor keeps annotations (it strips them unless annotation rules are
+// set), or a name matching exclude.
+func (n *Node) ignored(pod *corev1.Pod) string {
+	keepsAnnotations := false
+	for _, r := range n.rules {
+		keepsAnnotations = keepsAnnotations || r.field == "annotations"
+	}
+	if v, ok := pod.Annotations[ignoreAnnotation]; ok && keepsAnnotations && strings.ToLower(strings.TrimSpace(v)) == "true" {
+		return "it has the annotation `" + ignoreAnnotation + ": true`"
+	}
+	for _, re := range n.exclude {
+		if re.MatchString(pod.Name) {
+			return "its name matches exclude pattern `" + re.String() + "`"
+		}
+	}
+	return ""
+}
+
+// needContainers is the processor's needContainerAttributes: without a
+// container attribute to extract, it doesn't keep the pod's containers.
+func (n *Node) needContainers() bool {
+	for k := range containerKeys {
+		if n.metadata[k] {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeID removes a container runtime prefix as the processor does: only
+// when splitting on "://" gives exactly two parts.
+func runtimeID(id string) string {
+	if parts := strings.Split(id, "://"); len(parts) == 2 {
+		return parts[1]
+	}
+	return id
 }
 
 // specNames reports whether the processor's container lookup includes the
@@ -220,69 +470,6 @@ func (n *Node) specNames() bool {
 		}
 	}
 	return false
-}
-
-// associate applies the pod_association rules in order.
-func (n *Node) associate(str func(string) (string, bool)) (*corev1.Pod, string) {
-rules:
-	for _, rule := range n.cfg.PodAssociation {
-		values := map[string]string{}
-		var vias []string
-		for _, s := range rule.Sources {
-			if s.From != "resource_attribute" {
-				// "connection" needs the client address, which a replay
-				// doesn't have.
-				continue rules
-			}
-			v, ok := str(s.Name)
-			if !ok {
-				continue rules
-			}
-			values[s.Name] = v
-			vias = append(vias, "resource_attribute "+s.Name+"="+v)
-		}
-		if pod := n.lookup(values); pod != nil {
-			return pod, strings.Join(vias, " + ")
-		}
-	}
-	return nil, ""
-}
-
-// lookup finds the pod that all of a rule's source values point to.
-func (n *Node) lookup(values map[string]string) *corev1.Pod {
-	var found *corev1.Pod
-	match := func(p *corev1.Pod, ok bool) bool {
-		if !ok || (found != nil && found != p) {
-			return false
-		}
-		found = p
-		return true
-	}
-	for k, v := range values {
-		var ok bool
-		switch k {
-		case "k8s.pod.ip":
-			ok = match(n.pods.ByIP(v))
-		case "k8s.pod.uid":
-			ok = match(n.pods.ByUID(v))
-		case "container.id":
-			ok = match(n.pods.ByContainerID(v))
-		case "k8s.pod.name":
-			ns, hasNS := values["k8s.namespace.name"]
-			if !hasNS {
-				return nil
-			}
-			ok = match(n.pods.ByName(ns, v))
-		case "k8s.namespace.name":
-			ok = true // used together with k8s.pod.name
-		default:
-			return nil
-		}
-		if !ok {
-			return nil
-		}
-	}
-	return found
 }
 
 // containers is the processor's per-pod container lookup (contrib 0.134,
@@ -312,7 +499,7 @@ func podContainers(pod *corev1.Pod, specNames bool) containers {
 		cs.status[st.Name] = true
 		// A container without an ID yet is stored under "", as upstream does:
 		// several such containers collapse into one entry, the last one.
-		cs.byID[kube.ContainerID(st.ContainerID)] = st.Name
+		cs.byID[runtimeID(st.ContainerID)] = st.Name
 	}
 	return cs
 }
@@ -670,7 +857,7 @@ func containerValue(key string, pod *corev1.Pod, id identified, attrs pcommon.Ma
 			if st.ContainerID == "" {
 				return skip("container " + id.name + " has no container ID in the pod status")
 			}
-			return write(kube.ContainerID(st.ContainerID), id.how)
+			return write(runtimeID(st.ContainerID), id.how)
 		}
 		d, err := canonicalImageRef(st.ImageID)
 		if err != nil || d == "" {
@@ -734,13 +921,18 @@ func (n *Node) namespaceStage(ps *proposals, ns string) {
 	}
 }
 
-// nodeStage proposes the node's labels and annotations, and its UID.
+// nodeStage proposes the node's labels and annotations, then its UID. The
+// processor watches nodes when it copies their labels or annotations or
+// extracts k8s.node.uid, and then always sets the UID (processor.go,
+// processResource), after the node's other attributes.
 func (n *Node) nodeStage(ps *proposals, name string) {
+	watches := n.metadata["k8s.node.uid"]
 	obj, missing := n.object(fromNode, name)
 	for _, r := range n.rules {
 		if r.from != fromNode {
 			continue
 		}
+		watches = true
 		if obj == nil {
 			r.unknown(ps, stageNode, missing)
 			continue
@@ -751,12 +943,14 @@ func (n *Node) nodeStage(ps *proposals, name string) {
 		}
 		r.propose(ps, stageNode, src, "node `"+name+"`'s")
 	}
-	if n.metadata["k8s.node.uid"] {
-		if obj == nil {
-			ps.add(stageNode, "k8s.node.uid", unknown(missing))
-		} else {
-			ps.add(stageNode, "k8s.node.uid", write(string(obj.UID), "node `"+name+"`'s UID"))
-		}
+	switch {
+	case !watches:
+	case obj == nil:
+		ps.add(stageNodeUID, "k8s.node.uid", unknown(missing))
+	case obj.UID != "":
+		ps.add(stageNodeUID, "k8s.node.uid", write(obj.UID, "node `"+name+"`'s UID"))
+	case n.metadata["k8s.node.uid"]:
+		ps.add(stageNodeUID, "k8s.node.uid", skip("node `"+name+"` has no UID"))
 	}
 }
 
@@ -805,6 +999,7 @@ const (
 	stageContainer
 	stageNamespace
 	stageNode
+	stageNodeUID
 )
 
 type action int
@@ -873,6 +1068,21 @@ func (ps *proposals) add(stage int, key string, p proposal) {
 	ps.by[key] = append(list, p)
 }
 
+// apply writes a stage's values into view the way setResourceAttribute
+// does, so later stages read the resource as the processor would.
+func (ps *proposals) apply(view pcommon.Map, stage int) {
+	for _, key := range ps.order {
+		for _, p := range ps.by[key] {
+			if p.stage != stage || p.act != actWrite {
+				continue
+			}
+			if v, ok := view.Get(key); !ok || v.AsString() == "" {
+				view.PutStr(key, p.value)
+			}
+		}
+	}
+}
+
 // resolve decides each attribute the way setResourceAttribute does, applies
 // the result to attrs and returns the events.
 func (ps *proposals) resolve(attrs pcommon.Map, pod *corev1.Pod, id identified) []lineage.Event {
@@ -919,7 +1129,10 @@ func (ps *proposals) resolve(attrs pcommon.Map, pod *corev1.Pod, id identified) 
 		for i := range list {
 			p := &list[i]
 			switch {
-			case p.setsValue(), p.act == actUnknown:
+			case p.setsValue(), p.act == actUnknown, keepAny && p.act == actWrite:
+				// container.id and the repo digests: the container's
+				// value only goes where the key is missing, so an empty
+				// value from the pod's attributes stays.
 				chosen = p
 				break pick
 			case p.act == actWrite && empty == nil:
@@ -1036,6 +1249,7 @@ func (r rule) propose(ps *proposals, stage int, src map[string]string, whose str
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	from := map[string]string{} // attribute -> the key it came from
 	for _, k := range keys {
 		v := src[k]
 		if !r.regex.MatchString(k) || v == "" {
@@ -1045,6 +1259,12 @@ func (r rule) propose(ps *proposals, stage int, src map[string]string, whose str
 		if r.hasRef {
 			name = string(r.regex.ExpandString(nil, r.name, k, r.regex.FindStringSubmatchIndex(k)))
 		}
+		if first, dup := from[name]; dup {
+			// The processor walks the keys in map order, so either wins.
+			ps.add(stage, name, unknown(fmt.Sprintf("%s %s `%s` and `%s` both become `%s`, and the processor takes either", whose, r.field, first, k, name)))
+			continue
+		}
+		from[name] = k
 		ps.add(stage, name, write(v, fmt.Sprintf("from %s %s `%s`", whose, r.singular(), k)))
 	}
 }

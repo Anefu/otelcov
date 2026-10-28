@@ -59,24 +59,42 @@ func TestContainerIdentification(t *testing.T) {
 
 func TestAssociation(t *testing.T) {
 	pod := nodetest.Pod("p", "10.0.0.1", "u1", nodetest.Container("app"))
-	n := node(t, nil, pod) // default rules and metadata
+	n := node(t, nil, pod) // no pod_association rules, default metadata
 
-	// No pod IP: falls back to the k8s.pod.uid rule.
-	out := nodetest.Run(t, n, nodetest.Item("s1", map[string]string{"k8s.pod.uid": "u1"}))
-	if e, ok := nodetest.Find(out.Events, "", lineage.Associated); !ok || e.Detail["via"] != "resource_attribute k8s.pod.uid=u1" {
-		t.Errorf("want association by uid: %+v", out.Events)
+	// Without rules the processor only looks up k8s.pod.ip (as the
+	// connection address); a UID alone matches nothing
+	// (pod_association.go, extractPodIDNoAssociations).
+	out := nodetest.Run(t, n, nodetest.Item("s1", map[string]string{"k8s.pod.ip": "10.0.0.1"}))
+	if e, ok := nodetest.Find(out.Events, "", lineage.Associated); !ok || e.Detail["via"] != "k8s.pod.ip=10.0.0.1 (as the connection address, since pod_association isn't set)" {
+		t.Errorf("want association by IP: %+v", out.Events)
 	}
-	if nodetest.Attrs(out.Items[0])["k8s.pod.uid"] != "u1" {
-		t.Error("uid should be kept")
+	out = nodetest.Run(t, n, nodetest.Item("s2", map[string]string{"k8s.pod.uid": "u1"}))
+	if _, ok := nodetest.Find(out.Events, "", lineage.Associated); ok {
+		t.Errorf("a UID alone shouldn't associate without rules: %+v", out.Events)
 	}
 
 	// Nothing matches: nothing is added, and the node says so.
-	out = nodetest.Run(t, n, nodetest.Item("s2", map[string]string{"k8s.pod.ip": "10.9.9.9"}))
+	out = nodetest.Run(t, n, nodetest.Item("s3", map[string]string{"k8s.pod.ip": "10.9.9.9"}))
 	if len(nodetest.Attrs(out.Items[0])) != 1 {
 		t.Errorf("attrs changed: %v", nodetest.Attrs(out.Items[0]))
 	}
-	if _, ok := nodetest.Find(out.Events, "", lineage.Skipped); !ok {
+	if e, ok := nodetest.Find(out.Events, "", lineage.Skipped); !ok || !strings.Contains(e.Reason, "no pod matches k8s.pod.ip=10.9.9.9") {
 		t.Errorf("want skipped: %+v", out.Events)
+	}
+
+	// The first rule the resource has values for decides; later rules
+	// aren't tried when its pod isn't found.
+	rules := map[string]any{"pod_association": []any{
+		map[string]any{"sources": []any{map[string]any{"from": "resource_attribute", "name": "k8s.pod.ip"}}},
+		map[string]any{"sources": []any{map[string]any{"from": "resource_attribute", "name": "k8s.pod.uid"}}},
+	}}
+	out = nodetest.Run(t, node(t, rules, pod), nodetest.Item("s4", map[string]string{"k8s.pod.ip": "10.9.9.9", "k8s.pod.uid": "u1"}))
+	if _, ok := nodetest.Find(out.Events, "", lineage.Associated); ok {
+		t.Errorf("the uid rule shouldn't be tried after the IP rule resolved: %+v", out.Events)
+	}
+	out = nodetest.Run(t, node(t, rules, pod), nodetest.Item("s5", map[string]string{"k8s.pod.uid": "u1"}))
+	if e, ok := nodetest.Find(out.Events, "", lineage.Associated); !ok || e.Detail["via"] != "resource_attribute k8s.pod.uid=u1" {
+		t.Errorf("want association by uid: %+v", out.Events)
 	}
 
 	// Name + namespace together.
@@ -84,7 +102,7 @@ func TestAssociation(t *testing.T) {
 		map[string]any{"from": "resource_attribute", "name": "k8s.pod.name"},
 		map[string]any{"from": "resource_attribute", "name": "k8s.namespace.name"},
 	}}}}, pod)
-	out = nodetest.Run(t, n, nodetest.Item("s3", map[string]string{"k8s.pod.name": "p", "k8s.namespace.name": "ns"}))
+	out = nodetest.Run(t, n, nodetest.Item("s6", map[string]string{"k8s.pod.name": "p", "k8s.namespace.name": "ns"}))
 	if _, ok := nodetest.Find(out.Events, "", lineage.Associated); !ok {
 		t.Errorf("want association by name: %+v", out.Events)
 	}

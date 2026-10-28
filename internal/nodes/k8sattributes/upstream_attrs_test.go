@@ -1,6 +1,7 @@
 package k8sattributes
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -206,17 +207,22 @@ func TestUpstreamAttributeCases(t *testing.T) {
 		{upstream: namespaces + "all-annotations", pod: extractionPod(), objs: kube.Objects{Namespaces: []corev1.Namespace{ns}},
 			extract: map[string]any{"metadata": []any{}, "annotations": []any{map[string]any{"key_regex": "an.*", "from": "namespace"}}},
 			want:    map[string]string{"k8s.namespace.annotations.annotation1": "av1"}},
-		{upstream: nodes + "labels + processor_test.go TestAddNodeLabels", pod: extractionPod(),
+		{upstream: nodes + "labels + processor_test.go TestAddNodeLabels",
+			note: "upstream's processor test hands the processor a cached pod with its node name; the real processor only keeps a pod's node name " +
+				"when k8s.node.name is extracted (removeUnnecessaryPodData), so the case extracts it",
+			pod:  extractionPod(),
 			objs: kube.Objects{Nodes: []corev1.Node{node1}},
-			extract: map[string]any{"metadata": []any{},
+			extract: map[string]any{"metadata": []any{"k8s.node.name"},
 				"labels":      []any{map[string]any{"tag_name": "l1", "key": "label1", "from": "node"}},
 				"annotations": []any{map[string]any{"tag_name": "a1", "key": "annotation1", "from": "node"}}},
 			want: map[string]string{"l1": "lv1", "a1": "av1"}},
-		{upstream: nodes + "all-labels", pod: extractionPod(), objs: kube.Objects{Nodes: []corev1.Node{node1}},
-			extract: map[string]any{"metadata": []any{}, "labels": []any{map[string]any{"key_regex": "la.*", "from": "node"}}},
-			want:    map[string]string{"k8s.node.labels.label1": "lv1"}},
-		{upstream: "processor_test.go TestAddNodeUID", pod: extractionPod(), objs: kube.Objects{Nodes: []corev1.Node{node1}},
-			extract: map[string]any{"metadata": []any{"k8s.node.uid"}},
+		{upstream: nodes + "all-labels", note: "with k8s.node.name, as above; the node's UID comes along",
+			pod: extractionPod(), objs: kube.Objects{Nodes: []corev1.Node{node1}},
+			extract: map[string]any{"metadata": []any{"k8s.node.name"}, "labels": []any{map[string]any{"key_regex": "la.*", "from": "node"}}},
+			want:    map[string]string{"k8s.node.labels.label1": "lv1", "k8s.node.uid": "asdfasdf-asdfasdf-asdf"}},
+		{upstream: "processor_test.go TestAddNodeUID", note: "with k8s.node.name, as for TestAddNodeLabels",
+			pod: extractionPod(), objs: kube.Objects{Nodes: []corev1.Node{node1}},
+			extract: map[string]any{"metadata": []any{"k8s.node.name", "k8s.node.uid"}},
 			want:    map[string]string{"k8s.node.uid": "asdfasdf-asdfasdf-asdf"}},
 	} {
 		t.Run(tc.upstream, func(t *testing.T) {
@@ -392,4 +398,124 @@ func TestConfigErrors(t *testing.T) {
 			t.Errorf("%s: want an error", name)
 		}
 	}
+}
+
+// Cases from a review of the model against the 0.134 source (processor.go,
+// client.go), beyond upstream's own tests.
+func TestProcessorOrder(t *testing.T) {
+	assoc := []any{map[string]any{"sources": []any{map[string]any{"from": "resource_attribute", "name": "k8s.pod.ip"}}}}
+	two := nodetest.Pod("web-1", "10.0.0.1", "u1", nodetest.Container("app"), nodetest.Container("sidecar"))
+	run := func(t *testing.T, pod corev1.Pod, objs kube.Objects, extract map[string]any, res map[string]string) (map[string]string, []lineage.Event) {
+		t.Helper()
+		objs.Pods = []corev1.Pod{pod}
+		n, err := New("collector/k8sattributes", map[string]any{"pod_association": assoc, "extract": extract}, objs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res == nil {
+			res = map[string]string{}
+		}
+		res["k8s.pod.ip"] = pod.Status.PodIP
+		out := nodetest.Run(t, n, nodetest.Item("s1", res))
+		return nodetest.Attrs(out.Items[0]), out.Events
+	}
+
+	// The processor identifies the container after the pod's attributes are
+	// on the resource, so a resource.opentelemetry.io/k8s.container.name
+	// annotation names the container in a multi-container pod.
+	t.Run("container named by the pod's annotation", func(t *testing.T) {
+		pod := two
+		pod.Annotations = map[string]string{"resource.opentelemetry.io/k8s.container.name": "app"}
+		got, _ := run(t, pod, kube.Objects{}, map[string]any{"metadata": []any{"k8s.container.name", "container.id"}, "otel_annotations": true}, nil)
+		if got["k8s.container.name"] != "app" || got["container.id"] != "id-web-1-app" {
+			t.Errorf("attrs = %v", got)
+		}
+	})
+	t.Run("the pod's attributes name a container the pod doesn't have", func(t *testing.T) {
+		pod := nodetest.Pod("web-1", "10.0.0.1", "u1", nodetest.Container("app"))
+		pod.Labels = map[string]string{"container": "worker"}
+		got, events := run(t, pod, kube.Objects{}, map[string]any{"metadata": []any{"container.id"},
+			"labels": []any{map[string]any{"tag_name": "k8s.container.name", "key": "container"}}}, nil)
+		if _, ok := got["container.id"]; ok {
+			t.Errorf("container.id should not be set: %v", got)
+		}
+		if _, ok := nodetest.Find(events, "container.id", lineage.Skipped); !ok {
+			t.Errorf("want container.id skipped: %+v", events)
+		}
+	})
+
+	node1 := corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1", UID: "node-uid", Labels: map[string]string{"zone": "eu-1", "id": "label-id"}}}
+	nodes := kube.Objects{Nodes: []corev1.Node{node1}}
+	// Without k8s.node.name extracted, the processor drops the pod's node
+	// name and only the resource's counts.
+	t.Run("node from the resource only", func(t *testing.T) {
+		extract := map[string]any{"metadata": []any{}, "labels": []any{map[string]any{"tag_name": "zone", "key": "zone", "from": "node"}}}
+		got, _ := run(t, nodetest.Pod("p", "10.0.0.1", "u1", nodetest.Container("app")), nodes, extract, nil)
+		if _, ok := got["zone"]; ok {
+			t.Errorf("zone should not be set without a node name: %v", got)
+		}
+		got, _ = run(t, nodetest.Pod("p", "10.0.0.1", "u1", nodetest.Container("app")), nodes, extract, map[string]string{"k8s.node.name": "node-1"})
+		if got["zone"] != "eu-1" || got["k8s.node.uid"] != "node-uid" {
+			t.Errorf("want zone and the node's UID from the resource's node: %v", got)
+		}
+	})
+	// The node's UID comes whenever the processor watches nodes, after the
+	// node's labels, so a label written to k8s.node.uid wins.
+	t.Run("node UID after node labels", func(t *testing.T) {
+		got, _ := run(t, nodetest.Pod("p", "10.0.0.1", "u1", nodetest.Container("app")), nodes, map[string]any{"metadata": []any{"k8s.node.name"},
+			"labels": []any{map[string]any{"tag_name": "k8s.node.uid", "key": "id", "from": "node"}}}, nil)
+		if got["k8s.node.uid"] != "label-id" {
+			t.Errorf("k8s.node.uid = %q, want the label's value", got["k8s.node.uid"])
+		}
+	})
+
+	t.Run("ignored pods", func(t *testing.T) {
+		jaeger := nodetest.Pod("my-jaeger-collector-5f7d", "10.0.0.1", "u1", nodetest.Container("app"))
+		got, events := run(t, jaeger, kube.Objects{}, map[string]any{"metadata": []any{"k8s.pod.name"}}, nil)
+		if _, ok := got["k8s.pod.name"]; ok {
+			t.Errorf("an excluded pod gets no attributes: %v", got)
+		}
+		if e, ok := nodetest.Find(events, "", lineage.Skipped); !ok || !strings.Contains(e.Reason, "exclude pattern `jaeger-collector`") {
+			t.Errorf("want skipped for the default exclude: %+v", events)
+		}
+		annotated := nodetest.Pod("p", "10.0.0.1", "u1", nodetest.Container("app"))
+		annotated.Annotations = map[string]string{"opentelemetry.io/k8s-processor/ignore": " True "}
+		// The annotation only counts when the processor keeps annotations.
+		if got, _ := run(t, annotated, kube.Objects{}, map[string]any{"metadata": []any{"k8s.pod.name"}}, nil); got["k8s.pod.name"] != "p" {
+			t.Errorf("without annotation rules the annotation is stripped: %v", got)
+		}
+		if got, _ := run(t, annotated, kube.Objects{}, map[string]any{"metadata": []any{"k8s.pod.name"}, "otel_annotations": true}, nil); got["k8s.pod.name"] != "" {
+			t.Errorf("with annotation rules the pod is ignored: %v", got)
+		}
+	})
+
+	t.Run("regex rule keys that become the same attribute", func(t *testing.T) {
+		pod := nodetest.Pod("p", "10.0.0.1", "u1", nodetest.Container("app"))
+		pod.Labels = map[string]string{"a.example/team": "x", "b.example/team": "y"}
+		_, events := run(t, pod, kube.Objects{}, map[string]any{"metadata": []any{},
+			"labels": []any{map[string]any{"tag_name": "$1", "key_regex": `.*/(team)`}}}, nil)
+		if _, ok := nodetest.Find(events, "team", lineage.Unverified); !ok {
+			t.Errorf("want team unverified: %+v", events)
+		}
+	})
+}
+
+func TestMoreConfigErrors(t *testing.T) {
+	for name, cfg := range map[string]map[string]any{
+		"auth_type":           {"auth_type": "token"},
+		"five sources":        {"pod_association": []any{map[string]any{"sources": []any{source(), source(), source(), source(), source()}}}},
+		"bad exclude":         {"exclude": map[string]any{"pods": []any{map[string]any{"name": "("}}}},
+		"unknown source from": {"pod_association": []any{map[string]any{"sources": []any{map[string]any{"from": "label", "name": "x"}}}}},
+	} {
+		if _, err := New("x", cfg, kube.Objects{}); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+	if _, err := New("x", map[string]any{"wait_for_metadata": true, "wait_for_metadata_timeout": "10s", "auth_type": "kubeConfig", "context": "kind"}, kube.Objects{}); err != nil {
+		t.Errorf("settings that don't change output should be accepted: %v", err)
+	}
+}
+
+func source() map[string]any {
+	return map[string]any{"from": "resource_attribute", "name": "k8s.pod.uid"}
 }
