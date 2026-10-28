@@ -84,11 +84,16 @@ func requestLine(t *testing.T, s sender, at time.Time, detected bool) string {
 }
 
 // pods as kubectl prints them from a newer cluster: status.observedGeneration
-// isn't in the 1.32 API types.
+// isn't in the 1.32 API types. Running pods list their containers in
+// status.containerStatuses, which k8sattributes uses to identify them.
 func podsYAML() string {
 	// Pods are named <deployment>-<pod-template-hash>-<suffix>, owned by the
 	// ReplicaSet <deployment>-<pod-template-hash>, as Kubernetes makes them.
-	pod := func(name, node, ip, containers, env string) string {
+	pod := func(name, node, ip, containers, env string, names ...string) string {
+		var statuses strings.Builder
+		for _, c := range names {
+			fmt.Fprintf(&statuses, "        - {name: %s, containerID: containerd://%s-%s, ready: true, restartCount: 0}\n", c, name, c)
+		}
 		parts := strings.Split(name, "-")
 		rs := strings.Join(parts[:len(parts)-1], "-")
 		hash := parts[len(parts)-2]
@@ -111,14 +116,15 @@ func podsYAML() string {
       podIP: %s
       podIPs: [{ip: %s}]
       observedGeneration: 1
-`, name, instance, hash, rs, node, strings.ReplaceAll(containers, "ENV", env), ip, ip)
+      containerStatuses:
+%s`, name, instance, hash, rs, node, strings.ReplaceAll(containers, "ENV", env), ip, ip, statuses.String())
 	}
 	vllm := "        - name: vllm\n          image: otelcov-demo\n          env:\n            - {name: OTEL_SERVICE_NAME, value: vllm}\nENV"
 	return "apiVersion: v1\nkind: List\nmetadata: {resourceVersion: \"\"}\nitems:\n" +
-		pod("vllm-chat-7d4b9c-x1", "otelcov-worker", "10.244.1.5", vllm, "") +
+		pod("vllm-chat-7d4b9c-x1", "otelcov-worker", "10.244.1.5", vllm, "", "vllm") +
 		pod("vllm-embed-5f6a7b-y2", "otelcov-worker2", "10.244.2.7",
 			vllm+"\n        - name: log-shipper\n          image: busybox:1.37",
-			"            - {name: OTEL_RESOURCE_ATTRIBUTES, value: k8s.container.name=vllm}")
+			"            - {name: OTEL_RESOURCE_ATTRIBUTES, value: k8s.container.name=vllm}", "vllm", "log-shipper")
 }
 
 func write(t *testing.T, path, content string) {

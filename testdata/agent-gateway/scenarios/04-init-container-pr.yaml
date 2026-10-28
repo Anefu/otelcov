@@ -1,0 +1,17 @@
+# A PR adds an init container to vllm-chat, which has one app container. The
+# k8sattributes processor counts init containers when it falls back to a pod's
+# only container, so it can no longer name vllm-chat's container.
+name: 04-init-container-pr
+description: "A PR adds an istio-init init container to vllm-chat."
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  recording: ../recordings/staging.otlp.jsonl
+  snapshot: ../recordings/staging.meta.yaml
+
+config:
+  pods: ../k8s/pods-init-container.yaml
+  topology: ../topology.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/04-init-container-pr.report.json

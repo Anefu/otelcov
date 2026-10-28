@@ -1,0 +1,946 @@
+{
+  "scenario": "04-init-container-pr",
+  "eval_time": "2026-10-23T10:00:30Z",
+  "summary": [
+    {
+      "requirement": "vllm-memory-watched",
+      "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+      "status": "not_covered",
+      "path": [
+        "s1",
+        "p1"
+      ],
+      "broken_at": "rule/team:vllm_memory_bytes:max"
+    },
+    {
+      "requirement": "vllm-memory-watched",
+      "pod": "inference/vllm-embed-5c8b9d6f7b-q4m9t",
+      "status": "covered",
+      "path": [
+        "s4",
+        "p3",
+        "r1",
+        "a1"
+      ],
+      "receiver": "inference-pager"
+    }
+  ],
+  "diagnosis": [
+    {
+      "requirement": "vllm-memory-watched",
+      "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+      "missing_label": "k8s_container_name",
+      "chain": [
+        "e59",
+        "e53",
+        "e10"
+      ],
+      "root_cause": "e10",
+      "explanation": "Rule `team:vllm_memory_bytes:max` only selects series matching `k8s_container_name=\"vllm\"`, and this pod's series has no `k8s_container_name` label, so it never reaches `VLLMMemoryHigh`. `k8s_container_name` comes from resource attribute `k8s.container.name`, which `agent/k8sattributes` didn't set: pod has 2 containers (vllm, istio-init (init container)) and the resource has neither `container.id` nor `k8s.container.name`, so the container can't be identified.",
+      "hints": [
+        "Set `k8s.container.name=vllm` in `OTEL_RESOURCE_ATTRIBUTES` on the `vllm` container.",
+        "Or have the SDK send `container.id`, so k8sattributes can match the container."
+      ]
+    }
+  ],
+  "signals": {
+    "a1": {
+      "node": "alert/VLLMMemoryHigh",
+      "kind": "alert",
+      "from": [
+        "r1"
+      ],
+      "labels": {
+        "alertname": "VLLMMemoryHigh",
+        "k8s_cluster_name": "kind-otelcov",
+        "k8s_namespace_name": "inference",
+        "k8s_pod_name": "vllm-embed-5c8b9d6f7b-q4m9t",
+        "severity": "page",
+        "team": "inference"
+      }
+    },
+    "c1": {
+      "node": "topology",
+      "kind": "otlp_metric",
+      "name": "process.memory.usage",
+      "from": [
+        "s1"
+      ],
+      "resource": {
+        "host.name": "kind-worker",
+        "k8s.cluster.name": "kind-otelcov",
+        "k8s.namespace.name": "inference",
+        "k8s.node.name": "kind-worker",
+        "k8s.pod.ip": "10.244.1.11",
+        "k8s.pod.name": "vllm-chat-6f9d8b7c4d-k2x7p",
+        "k8s.pod.uid": "3f6c2a9e-8b1d-4c57-9e2a-1d7b5c4e8f01",
+        "os.type": "linux",
+        "service.name": "vllm",
+        "team": "inference",
+        "telemetry.sdk.language": "python"
+      }
+    },
+    "c2": {
+      "node": "topology",
+      "kind": "otlp_metric",
+      "name": "vllm.requests",
+      "from": [
+        "s3"
+      ],
+      "resource": {
+        "host.name": "kind-worker",
+        "k8s.cluster.name": "kind-otelcov",
+        "k8s.namespace.name": "inference",
+        "k8s.node.name": "kind-worker",
+        "k8s.pod.ip": "10.244.1.11",
+        "k8s.pod.name": "vllm-chat-6f9d8b7c4d-k2x7p",
+        "k8s.pod.uid": "3f6c2a9e-8b1d-4c57-9e2a-1d7b5c4e8f01",
+        "os.type": "linux",
+        "service.name": "vllm",
+        "team": "inference",
+        "telemetry.sdk.language": "python"
+      }
+    },
+    "c3": {
+      "node": "topology",
+      "kind": "otlp_metric",
+      "name": "process.memory.usage",
+      "from": [
+        "s4"
+      ],
+      "resource": {
+        "host.name": "kind-worker2",
+        "k8s.cluster.name": "kind-otelcov",
+        "k8s.container.name": "vllm",
+        "k8s.namespace.name": "inference",
+        "k8s.node.name": "kind-worker2",
+        "k8s.pod.ip": "10.244.2.12",
+        "k8s.pod.name": "vllm-embed-5c8b9d6f7b-q4m9t",
+        "k8s.pod.uid": "9a1e4d7c-2f6b-4b83-a5c9-6e0d2b8f7a42",
+        "os.type": "linux",
+        "service.name": "vllm",
+        "team": "inference",
+        "telemetry.sdk.language": "python"
+      }
+    },
+    "p1": {
+      "node": "backend/mimir",
+      "kind": "series",
+      "from": [
+        "s1"
+      ],
+      "labels": {
+        "__name__": "process_memory_usage_bytes",
+        "job": "vllm",
+        "k8s_cluster_name": "kind-otelcov",
+        "k8s_namespace_name": "inference",
+        "k8s_node_name": "kind-worker",
+        "k8s_pod_name": "vllm-chat-6f9d8b7c4d-k2x7p",
+        "team": "inference"
+      },
+      "value": 9126805504
+    },
+    "p2": {
+      "node": "backend/mimir",
+      "kind": "series",
+      "from": [
+        "s3"
+      ],
+      "labels": {
+        "__name__": "vllm_requests_total",
+        "job": "vllm",
+        "k8s_cluster_name": "kind-otelcov",
+        "k8s_namespace_name": "inference",
+        "k8s_node_name": "kind-worker",
+        "k8s_pod_name": "vllm-chat-6f9d8b7c4d-k2x7p",
+        "team": "inference"
+      },
+      "value": 42
+    },
+    "p3": {
+      "node": "backend/mimir",
+      "kind": "series",
+      "from": [
+        "s4"
+      ],
+      "labels": {
+        "__name__": "process_memory_usage_bytes",
+        "job": "vllm",
+        "k8s_cluster_name": "kind-otelcov",
+        "k8s_container_name": "vllm",
+        "k8s_namespace_name": "inference",
+        "k8s_node_name": "kind-worker2",
+        "k8s_pod_name": "vllm-embed-5c8b9d6f7b-q4m9t",
+        "team": "inference"
+      },
+      "value": 7415529472
+    },
+    "p4": {
+      "node": "backend/mimir",
+      "kind": "series",
+      "from": [
+        "s1",
+        "s3"
+      ],
+      "labels": {
+        "__name__": "target_info",
+        "host_name": "kind-worker",
+        "job": "vllm",
+        "k8s_cluster_name": "kind-otelcov",
+        "k8s_namespace_name": "inference",
+        "k8s_node_name": "kind-worker",
+        "k8s_pod_ip": "10.244.1.11",
+        "k8s_pod_name": "vllm-chat-6f9d8b7c4d-k2x7p",
+        "k8s_pod_uid": "3f6c2a9e-8b1d-4c57-9e2a-1d7b5c4e8f01",
+        "os_type": "linux",
+        "team": "inference",
+        "telemetry_sdk_language": "python"
+      },
+      "value": 1
+    },
+    "p5": {
+      "node": "backend/mimir",
+      "kind": "series",
+      "from": [
+        "s4"
+      ],
+      "labels": {
+        "__name__": "target_info",
+        "host_name": "kind-worker2",
+        "job": "vllm",
+        "k8s_cluster_name": "kind-otelcov",
+        "k8s_container_name": "vllm",
+        "k8s_namespace_name": "inference",
+        "k8s_node_name": "kind-worker2",
+        "k8s_pod_ip": "10.244.2.12",
+        "k8s_pod_name": "vllm-embed-5c8b9d6f7b-q4m9t",
+        "k8s_pod_uid": "9a1e4d7c-2f6b-4b83-a5c9-6e0d2b8f7a42",
+        "os_type": "linux",
+        "team": "inference",
+        "telemetry_sdk_language": "python"
+      },
+      "value": 1
+    },
+    "r1": {
+      "node": "rule/team:vllm_memory_bytes:max",
+      "kind": "series",
+      "from": [
+        "p3"
+      ],
+      "labels": {
+        "__name__": "team:vllm_memory_bytes:max",
+        "k8s_cluster_name": "kind-otelcov",
+        "k8s_namespace_name": "inference",
+        "k8s_pod_name": "vllm-embed-5c8b9d6f7b-q4m9t",
+        "team": "inference"
+      },
+      "value": 7415529472
+    },
+    "s1": {
+      "node": "source/otlp-replay",
+      "kind": "otlp_metric",
+      "name": "process.memory.usage",
+      "origin": "recordings/staging.otlp.jsonl#L1",
+      "resource": {
+        "k8s.pod.ip": "10.244.1.11",
+        "service.name": "vllm",
+        "telemetry.sdk.language": "python"
+      }
+    },
+    "s2": {
+      "node": "source/otlp-replay",
+      "kind": "otlp_metric",
+      "name": "debug.heartbeat",
+      "origin": "recordings/staging.otlp.jsonl#L1",
+      "resource": {
+        "k8s.pod.ip": "10.244.1.11",
+        "service.name": "vllm",
+        "telemetry.sdk.language": "python"
+      }
+    },
+    "s3": {
+      "node": "source/otlp-replay",
+      "kind": "otlp_metric",
+      "name": "vllm.requests",
+      "origin": "recordings/staging.otlp.jsonl#L1",
+      "resource": {
+        "k8s.pod.ip": "10.244.1.11",
+        "service.name": "vllm",
+        "telemetry.sdk.language": "python"
+      }
+    },
+    "s4": {
+      "node": "source/otlp-replay",
+      "kind": "otlp_metric",
+      "name": "process.memory.usage",
+      "origin": "recordings/staging.otlp.jsonl#L2",
+      "resource": {
+        "k8s.container.name": "vllm",
+        "k8s.pod.ip": "10.244.2.12",
+        "service.name": "vllm",
+        "telemetry.sdk.language": "python"
+      }
+    }
+  },
+  "events": [
+    {
+      "id": "e1",
+      "node": "source/sdk-env",
+      "signal": "s1",
+      "action": "attributed",
+      "detail": {
+        "container": "vllm",
+        "container_via": "service.name \"vllm\" matches OTEL_SERVICE_NAME of container vllm",
+        "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+        "pod_via": "k8s.pod.ip=10.244.1.11 in the snapshot pod specs"
+      }
+    },
+    {
+      "id": "e2",
+      "node": "source/sdk-env",
+      "signal": "s2",
+      "action": "attributed",
+      "detail": {
+        "container": "vllm",
+        "container_via": "service.name \"vllm\" matches OTEL_SERVICE_NAME of container vllm",
+        "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+        "pod_via": "k8s.pod.ip=10.244.1.11 in the snapshot pod specs"
+      }
+    },
+    {
+      "id": "e3",
+      "node": "source/sdk-env",
+      "signal": "s3",
+      "action": "attributed",
+      "detail": {
+        "container": "vllm",
+        "container_via": "service.name \"vllm\" matches OTEL_SERVICE_NAME of container vllm",
+        "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+        "pod_via": "k8s.pod.ip=10.244.1.11 in the snapshot pod specs"
+      }
+    },
+    {
+      "id": "e4",
+      "node": "source/sdk-env",
+      "signal": "s4",
+      "action": "attributed",
+      "detail": {
+        "container": "vllm",
+        "container_via": "service.name \"vllm\" matches OTEL_SERVICE_NAME of container vllm",
+        "pod": "inference/vllm-embed-5c8b9d6f7b-q4m9t",
+        "pod_via": "k8s.pod.ip=10.244.2.12 in the snapshot pod specs"
+      }
+    },
+    {
+      "id": "e5",
+      "node": "agent/k8sattributes",
+      "signal": "s1",
+      "action": "associated",
+      "detail": {
+        "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+        "via": "resource_attribute k8s.pod.ip=10.244.1.11"
+      }
+    },
+    {
+      "id": "e6",
+      "node": "agent/k8sattributes",
+      "signal": "s1",
+      "attribute": "k8s.namespace.name",
+      "action": "set",
+      "value": "inference"
+    },
+    {
+      "id": "e7",
+      "node": "agent/k8sattributes",
+      "signal": "s1",
+      "attribute": "k8s.pod.name",
+      "action": "set",
+      "value": "vllm-chat-6f9d8b7c4d-k2x7p"
+    },
+    {
+      "id": "e8",
+      "node": "agent/k8sattributes",
+      "signal": "s1",
+      "attribute": "k8s.pod.uid",
+      "action": "set",
+      "value": "3f6c2a9e-8b1d-4c57-9e2a-1d7b5c4e8f01"
+    },
+    {
+      "id": "e9",
+      "node": "agent/k8sattributes",
+      "signal": "s1",
+      "attribute": "k8s.node.name",
+      "action": "set",
+      "value": "kind-worker"
+    },
+    {
+      "id": "e10",
+      "node": "agent/k8sattributes",
+      "signal": "s1",
+      "attribute": "k8s.container.name",
+      "action": "skipped",
+      "reason": "pod has 2 containers (vllm, istio-init (init container)) and the resource has neither `container.id` nor `k8s.container.name`, so the container can't be identified"
+    },
+    {
+      "id": "e11",
+      "node": "agent/k8sattributes",
+      "signal": "s2",
+      "action": "associated",
+      "detail": {
+        "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+        "via": "resource_attribute k8s.pod.ip=10.244.1.11"
+      }
+    },
+    {
+      "id": "e12",
+      "node": "agent/k8sattributes",
+      "signal": "s2",
+      "attribute": "k8s.namespace.name",
+      "action": "set",
+      "value": "inference"
+    },
+    {
+      "id": "e13",
+      "node": "agent/k8sattributes",
+      "signal": "s2",
+      "attribute": "k8s.pod.name",
+      "action": "set",
+      "value": "vllm-chat-6f9d8b7c4d-k2x7p"
+    },
+    {
+      "id": "e14",
+      "node": "agent/k8sattributes",
+      "signal": "s2",
+      "attribute": "k8s.pod.uid",
+      "action": "set",
+      "value": "3f6c2a9e-8b1d-4c57-9e2a-1d7b5c4e8f01"
+    },
+    {
+      "id": "e15",
+      "node": "agent/k8sattributes",
+      "signal": "s2",
+      "attribute": "k8s.node.name",
+      "action": "set",
+      "value": "kind-worker"
+    },
+    {
+      "id": "e16",
+      "node": "agent/k8sattributes",
+      "signal": "s2",
+      "attribute": "k8s.container.name",
+      "action": "skipped",
+      "reason": "pod has 2 containers (vllm, istio-init (init container)) and the resource has neither `container.id` nor `k8s.container.name`, so the container can't be identified"
+    },
+    {
+      "id": "e17",
+      "node": "agent/k8sattributes",
+      "signal": "s3",
+      "action": "associated",
+      "detail": {
+        "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
+        "via": "resource_attribute k8s.pod.ip=10.244.1.11"
+      }
+    },
+    {
+      "id": "e18",
+      "node": "agent/k8sattributes",
+      "signal": "s3",
+      "attribute": "k8s.namespace.name",
+      "action": "set",
+      "value": "inference"
+    },
+    {
+      "id": "e19",
+      "node": "agent/k8sattributes",
+      "signal": "s3",
+      "attribute": "k8s.pod.name",
+      "action": "set",
+      "value": "vllm-chat-6f9d8b7c4d-k2x7p"
+    },
+    {
+      "id": "e20",
+      "node": "agent/k8sattributes",
+      "signal": "s3",
+      "attribute": "k8s.pod.uid",
+      "action": "set",
+      "value": "3f6c2a9e-8b1d-4c57-9e2a-1d7b5c4e8f01"
+    },
+    {
+      "id": "e21",
+      "node": "agent/k8sattributes",
+      "signal": "s3",
+      "attribute": "k8s.node.name",
+      "action": "set",
+      "value": "kind-worker"
+    },
+    {
+      "id": "e22",
+      "node": "agent/k8sattributes",
+      "signal": "s3",
+      "attribute": "k8s.container.name",
+      "action": "skipped",
+      "reason": "pod has 2 containers (vllm, istio-init (init container)) and the resource has neither `container.id` nor `k8s.container.name`, so the container can't be identified"
+    },
+    {
+      "id": "e23",
+      "node": "agent/k8sattributes",
+      "signal": "s4",
+      "action": "associated",
+      "detail": {
+        "pod": "inference/vllm-embed-5c8b9d6f7b-q4m9t",
+        "via": "resource_attribute k8s.pod.ip=10.244.2.12"
+      }
+    },
+    {
+      "id": "e24",
+      "node": "agent/k8sattributes",
+      "signal": "s4",
+      "attribute": "k8s.namespace.name",
+      "action": "set",
+      "value": "inference"
+    },
+    {
+      "id": "e25",
+      "node": "agent/k8sattributes",
+      "signal": "s4",
+      "attribute": "k8s.pod.name",
+      "action": "set",
+      "value": "vllm-embed-5c8b9d6f7b-q4m9t"
+    },
+    {
+      "id": "e26",
+      "node": "agent/k8sattributes",
+      "signal": "s4",
+      "attribute": "k8s.pod.uid",
+      "action": "set",
+      "value": "9a1e4d7c-2f6b-4b83-a5c9-6e0d2b8f7a42"
+    },
+    {
+      "id": "e27",
+      "node": "agent/k8sattributes",
+      "signal": "s4",
+      "attribute": "k8s.node.name",
+      "action": "set",
+      "value": "kind-worker2"
+    },
+    {
+      "id": "e28",
+      "node": "agent/k8sattributes",
+      "signal": "s4",
+      "attribute": "k8s.container.name",
+      "action": "kept",
+      "value": "vllm",
+      "reason": "already on the input resource; identifies container vllm of 2"
+    },
+    {
+      "id": "e29",
+      "node": "agent/resourcedetection",
+      "signal": "s1",
+      "attribute": "host.name",
+      "action": "set",
+      "value": "kind-worker",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e30",
+      "node": "agent/resourcedetection",
+      "signal": "s1",
+      "attribute": "os.type",
+      "action": "set",
+      "value": "linux",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e31",
+      "node": "agent/resourcedetection",
+      "signal": "s2",
+      "attribute": "host.name",
+      "action": "set",
+      "value": "kind-worker",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e32",
+      "node": "agent/resourcedetection",
+      "signal": "s2",
+      "attribute": "os.type",
+      "action": "set",
+      "value": "linux",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e33",
+      "node": "agent/resourcedetection",
+      "signal": "s3",
+      "attribute": "host.name",
+      "action": "set",
+      "value": "kind-worker",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e34",
+      "node": "agent/resourcedetection",
+      "signal": "s3",
+      "attribute": "os.type",
+      "action": "set",
+      "value": "linux",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e35",
+      "node": "agent/resourcedetection",
+      "signal": "s4",
+      "attribute": "host.name",
+      "action": "set",
+      "value": "kind-worker2",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e36",
+      "node": "agent/resourcedetection",
+      "signal": "s4",
+      "attribute": "os.type",
+      "action": "set",
+      "value": "linux",
+      "reason": "detected by resourcedetection (recorded in the snapshot)"
+    },
+    {
+      "id": "e37",
+      "node": "agent/resource",
+      "signal": "s1",
+      "attribute": "k8s.cluster.name",
+      "action": "set",
+      "value": "kind-otelcov",
+      "reason": "changed by the resource processor"
+    },
+    {
+      "id": "e38",
+      "node": "agent/resource",
+      "signal": "s2",
+      "attribute": "k8s.cluster.name",
+      "action": "set",
+      "value": "kind-otelcov",
+      "reason": "changed by the resource processor"
+    },
+    {
+      "id": "e39",
+      "node": "agent/resource",
+      "signal": "s3",
+      "attribute": "k8s.cluster.name",
+      "action": "set",
+      "value": "kind-otelcov",
+      "reason": "changed by the resource processor"
+    },
+    {
+      "id": "e40",
+      "node": "agent/resource",
+      "signal": "s4",
+      "attribute": "k8s.cluster.name",
+      "action": "set",
+      "value": "kind-otelcov",
+      "reason": "changed by the resource processor"
+    },
+    {
+      "id": "e41",
+      "node": "gateway/filter/drop-debug",
+      "signal": "s2",
+      "action": "dropped",
+      "reason": "dropped by filter metric condition `name == \"debug.heartbeat\"`"
+    },
+    {
+      "id": "e42",
+      "node": "gateway/transform/team",
+      "signal": "s1",
+      "attribute": "team",
+      "action": "set",
+      "value": "inference",
+      "reason": "set by resource statement `set(attributes[\"team\"], \"inference\") where attributes[\"k8s.namespace.name\"] == \"inference\"`",
+      "detail": {
+        "context": "resource",
+        "statement": "set(attributes[\"team\"], \"inference\") where attributes[\"k8s.namespace.name\"] == \"inference\""
+      }
+    },
+    {
+      "id": "e43",
+      "node": "gateway/transform/team",
+      "signal": "s3",
+      "attribute": "team",
+      "action": "set",
+      "value": "inference",
+      "reason": "set by resource statement `set(attributes[\"team\"], \"inference\") where attributes[\"k8s.namespace.name\"] == \"inference\"`",
+      "detail": {
+        "context": "resource",
+        "statement": "set(attributes[\"team\"], \"inference\") where attributes[\"k8s.namespace.name\"] == \"inference\""
+      }
+    },
+    {
+      "id": "e44",
+      "node": "gateway/transform/team",
+      "signal": "s4",
+      "attribute": "team",
+      "action": "set",
+      "value": "inference",
+      "reason": "set by resource statement `set(attributes[\"team\"], \"inference\") where attributes[\"k8s.namespace.name\"] == \"inference\"`",
+      "detail": {
+        "context": "resource",
+        "statement": "set(attributes[\"team\"], \"inference\") where attributes[\"k8s.namespace.name\"] == \"inference\""
+      }
+    },
+    {
+      "id": "e45",
+      "node": "gateway/deltatocumulative",
+      "signal": "s3",
+      "attribute": "metric.temporality",
+      "action": "set",
+      "value": "Cumulative",
+      "reason": "changed by the deltatocumulative processor",
+      "detail": {
+        "level": "metric",
+        "was": "Delta"
+      }
+    },
+    {
+      "id": "e46",
+      "node": "topology",
+      "signal": "c1",
+      "action": "derived",
+      "reason": "gateway pipeline metrics also exports to debug",
+      "from": [
+        "s1"
+      ]
+    },
+    {
+      "id": "e47",
+      "node": "topology",
+      "signal": "c2",
+      "action": "derived",
+      "reason": "gateway pipeline metrics also exports to debug",
+      "from": [
+        "s3"
+      ]
+    },
+    {
+      "id": "e48",
+      "node": "topology",
+      "signal": "c3",
+      "action": "derived",
+      "reason": "gateway pipeline metrics also exports to debug",
+      "from": [
+        "s4"
+      ]
+    },
+    {
+      "id": "e49",
+      "node": "gateway/debug",
+      "signal": "c1",
+      "action": "exported",
+      "reason": "leaves the modeled system: the exporter is listed as external in the topology"
+    },
+    {
+      "id": "e50",
+      "node": "gateway/debug",
+      "signal": "c2",
+      "action": "exported",
+      "reason": "leaves the modeled system: the exporter is listed as external in the topology"
+    },
+    {
+      "id": "e51",
+      "node": "gateway/debug",
+      "signal": "c3",
+      "action": "exported",
+      "reason": "leaves the modeled system: the exporter is listed as external in the topology"
+    },
+    {
+      "id": "e52",
+      "node": "backend/mimir",
+      "signal": "p1",
+      "action": "derived",
+      "from": [
+        "s1"
+      ],
+      "detail": {
+        "job_from": "service.name",
+        "metric": {
+          "from": "process.memory.usage",
+          "to": "process_memory_usage_bytes"
+        },
+        "promoted": {
+          "k8s.cluster.name": "k8s_cluster_name",
+          "k8s.namespace.name": "k8s_namespace_name",
+          "k8s.node.name": "k8s_node_name",
+          "k8s.pod.name": "k8s_pod_name",
+          "team": "team"
+        },
+        "target_info_only": [
+          "host.name",
+          "k8s.pod.ip",
+          "k8s.pod.uid",
+          "os.type",
+          "telemetry.sdk.language"
+        ]
+      }
+    },
+    {
+      "id": "e53",
+      "node": "backend/mimir",
+      "signal": "p1",
+      "attribute": "k8s.container.name",
+      "action": "skipped",
+      "reason": "listed in promote_otel_resource_attributes, but absent on the input resource"
+    },
+    {
+      "id": "e54",
+      "node": "backend/mimir",
+      "signal": "p2",
+      "action": "derived",
+      "from": [
+        "s3"
+      ],
+      "detail": {
+        "job_from": "service.name",
+        "metric": {
+          "from": "vllm.requests",
+          "to": "vllm_requests_total"
+        },
+        "promoted": {
+          "k8s.cluster.name": "k8s_cluster_name",
+          "k8s.namespace.name": "k8s_namespace_name",
+          "k8s.node.name": "k8s_node_name",
+          "k8s.pod.name": "k8s_pod_name",
+          "team": "team"
+        },
+        "target_info_only": [
+          "host.name",
+          "k8s.pod.ip",
+          "k8s.pod.uid",
+          "os.type",
+          "telemetry.sdk.language"
+        ]
+      }
+    },
+    {
+      "id": "e55",
+      "node": "backend/mimir",
+      "signal": "p2",
+      "attribute": "k8s.container.name",
+      "action": "skipped",
+      "reason": "listed in promote_otel_resource_attributes, but absent on the input resource"
+    },
+    {
+      "id": "e56",
+      "node": "backend/mimir",
+      "signal": "p3",
+      "action": "derived",
+      "from": [
+        "s4"
+      ],
+      "detail": {
+        "job_from": "service.name",
+        "metric": {
+          "from": "process.memory.usage",
+          "to": "process_memory_usage_bytes"
+        },
+        "promoted": {
+          "k8s.cluster.name": "k8s_cluster_name",
+          "k8s.container.name": "k8s_container_name",
+          "k8s.namespace.name": "k8s_namespace_name",
+          "k8s.node.name": "k8s_node_name",
+          "k8s.pod.name": "k8s_pod_name",
+          "team": "team"
+        },
+        "target_info_only": [
+          "host.name",
+          "k8s.pod.ip",
+          "k8s.pod.uid",
+          "os.type",
+          "telemetry.sdk.language"
+        ]
+      }
+    },
+    {
+      "id": "e57",
+      "node": "backend/mimir",
+      "signal": "p4",
+      "action": "derived",
+      "reason": "target_info carries the resource attributes that aren't promoted to labels",
+      "from": [
+        "s1",
+        "s3"
+      ]
+    },
+    {
+      "id": "e58",
+      "node": "backend/mimir",
+      "signal": "p5",
+      "action": "derived",
+      "reason": "target_info carries the resource attributes that aren't promoted to labels",
+      "from": [
+        "s4"
+      ]
+    },
+    {
+      "id": "e59",
+      "node": "rule/team:vllm_memory_bytes:max",
+      "signal": "p1",
+      "attribute": "k8s_container_name",
+      "action": "dropped",
+      "reason": "the selector matcher k8s_container_name=\"vllm\" needs this label; the series has none",
+      "detail": {
+        "requires": {
+          "clause": "selector",
+          "label": "k8s_container_name",
+          "matcher": "k8s_container_name=\"vllm\""
+        }
+      }
+    },
+    {
+      "id": "e60",
+      "node": "rule/team:vllm_memory_bytes:max",
+      "signal": "r1",
+      "action": "derived",
+      "from": [
+        "p3"
+      ],
+      "detail": {
+        "expr": "max by (k8s_cluster_name, k8s_namespace_name, k8s_pod_name, team) (process_memory_usage_bytes{job=\"vllm\",k8s_container_name=\"vllm\",team=\"inference\"})"
+      }
+    },
+    {
+      "id": "e61",
+      "node": "alert/VLLMMemoryHigh",
+      "signal": "a1",
+      "action": "derived",
+      "reason": "thresholds are ignored: coverage asks whether a series could make the alert fire, not whether it fires now; `for` is treated as met",
+      "from": [
+        "r1"
+      ],
+      "detail": {
+        "evaluated_as": "team:vllm_memory_bytes:max \u003e bool 12000000000",
+        "expr": "team:vllm_memory_bytes:max \u003e 12000000000",
+        "for": "10m0s"
+      }
+    },
+    {
+      "id": "e62",
+      "node": "alertmanager/route",
+      "signal": "a1",
+      "action": "routed",
+      "detail": {
+        "receiver": "inference-pager",
+        "route": [
+          {
+            "matchers": [],
+            "receiver": "platform-default"
+          },
+          {
+            "matchers": [
+              "severity=\"page\"",
+              "team=\"inference\""
+            ],
+            "receiver": "inference-pager"
+          }
+        ]
+      }
+    }
+  ]
+}

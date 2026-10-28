@@ -23,13 +23,14 @@ The rule selects `team="inference"`, and `team` comes from the gateway's `transf
 
 ## Scenarios
 
-All three replay the same recording with different config.
+All four replay the same recording with different config.
 
 | Scenario | Config under test | Expected for both pods |
 |---|---|---|
 | `01-baseline` | as deployed | covered |
 | `02-team-condition-pr` | PR changes the team statement's condition to namespace `inference-prod` | not covered: the diagnosis names the statement, says its condition is false, and what it would have set |
 | `03-bad-join` | agent sends gRPC to the gateway's HTTP port (4318) | unverified: validation can't trust the agent → gateway join; the topology problem is in the report |
+| `04-init-container-pr` | PR adds an `istio-init` init container to vllm-chat | vllm-chat not covered: k8sattributes counts init containers, so it can't name the container (root cause in the diagnosis); vllm-embed still covered |
 
 ## Layout
 
@@ -42,6 +43,7 @@ All three replay the same recording with different config.
 | `recordings/staging.otlp.jsonl` | Tap output: one OTLP/JSON export request per line |
 | `recordings/staging.meta.yaml` | Snapshot metadata: pod specs and what each resourcedetection processor detected, per node, with its config at recording time |
 | `k8s/pods.yaml` | Pods as the API returns them |
+| `k8s/pods-init-container.yaml` | The same pods, with an init container added to vllm-chat (scenario 04) |
 | `backend/mimir.yaml` | Mimir limits: promoted resource attributes (including `team`), suffixes on |
 | `rules/`, `alertmanager/` | The rule file and routing tree |
 | `requirements/vllm.yaml` | What "covered" means here |
@@ -68,4 +70,5 @@ and update the `sha256` fields, or the report will warn that the topology may be
 
 - **Created** together with the topology runner, real processor nodes and OTTL statement explanations. Reviewed by hand: 01 covered for both pods; 02 not covered for both, root cause the skipped `transform/team` statement, then Mimir's `skipped` promotion of `team`, then the rule's `dropped`; 03 unverified for both via the join event.
 - **Report section renamed**: `topology` is now `problems` (03), since it also carries pod fields otelcov doesn't know. Nothing else changed.
+- **04 created** (2026-10-28) with the k8sattributes parity fix: vllm-chat not covered, root cause `agent/k8sattributes` ("pod has 2 containers (vllm, istio-init (init container))…"), vllm-embed covered. The other reports didn't change.
 - **Identifiers quoted, one hint for a skipped statement** (02): explanations put identifiers in backticks; the two hints became one that says what to change ("Make the condition `...` in `gateway/transform/team` hold for this pod, or set `team` another way") instead of restating the explanation; the skipped events carry the statement's condition as `detail.where`.
