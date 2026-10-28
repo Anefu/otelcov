@@ -59,6 +59,19 @@ The owner's stack only, behind generic interfaces:
 
 Other deployment patterns and backends come later, as adapters.
 
+## Direction (owner, 2026-10-28)
+
+- **Fix the known gaps first** (see Known gaps): correctness and reliability before new breadth (decision 52).
+- **"Feature rich" means one full end-to-end workflow** that delivers value immediately, not many features (decision 53).
+- **The target workflow, after the gaps** (decision 55):
+  1. **Predict**: a PR gate that shows the coverage diff.
+  2. **Confirm**: after deploy, compare against the real stack.
+  3. **Record**: hashed inputs and a signed report, e.g. in-toto.
+- **Two reference stacks** (decision 54):
+  - **The kind lab, hardened** and run in CI on every PR, compared against the real stack: add a pod with an init container, a k8sattributes `filter`, and a realistic Mimir config with `runtime_config` and non-OTLP limits.
+  - **Upstream Helm charts, unchanged**, as a slower acceptance test (e.g. nightly): the OpenTelemetry Collector chart as daemonset agents plus a gateway, `mimir-distributed`, and the OpenTelemetry demo app.
+- **The bar for approaching design partners** (decision 56), all three: otelcov works unchanged on the upstream charts; the PR gate works end to end; the first signed evidence report exists.
+
 ## Architecture (decided)
 
 ### The graph
@@ -125,6 +138,30 @@ Other deployment patterns and backends come later, as adapters.
 ### Requirements
 
 - Proposed principle (the owner hasn't explicitly confirmed it): written **in OTel terms, not backend terms**: "every pod with `app=vllm`: `process.memory.usage` must reach alert X, then receiver Y". The same requirement then works whatever backend stores the data. Draft format: `testdata/thin-slice/requirements/vllm.yaml`.
+- **Next format: A** (decision 57, not built yet). Each requirement names its `subjects`, a `signal` and the destinations it `reaches` (all must hold), plus optional `must_not_reach`:
+
+  ```yaml
+  requirements:
+    - id: vllm-memory
+      subjects:
+        kind: pod                     # pod | node | workload | namespace | entity
+        namespace: inference
+        labels: { app.kubernetes.io/name: vllm }   # "*" means the label must exist
+        container: vllm
+      signal:
+        metrics: [process.memory.usage]           # any of these counts
+      reaches:
+        - alert: VLLMMemoryHigh
+          receivers: ["{{ subject.labels.team }}-pager"]   # all of these; a template is resolved per subject
+          labels: [k8s_pod_name]                  # the alert must carry these
+        - dashboard: { uid: vllm-overview, panel: "Memory by pod" }
+      must_not_reach: [ { backend: mimir } ]
+  ```
+
+  - **Built first: pods only.** Pod subjects, several metrics, alerts with several receivers, templated receivers, the labels check. Anything else in a file (other kinds, dashboards, `must_not_reach`) is accepted and comes out `unverified` ("not supported yet").
+  - **Templated receivers** take the label from the **pod's labels**.
+  - **Kinds are shortcuts for OpenTelemetry entities**: each kind is defined by the resource attributes that identify it (pod: `k8s.pod.uid`, or namespace and name; node: `k8s.node.name`; workload: `k8s.deployment.name` etc. with the namespace), and `kind: entity` with `attributes:` covers things outside Kubernetes.
+  - **The current format is replaced**, not kept alongside: the three existing requirements files are converted.
 
 ### Topology
 
@@ -304,6 +341,12 @@ Other deployment patterns and backends come later, as adapters.
 | 49 | Report UI: one static, self-contained HTML page (`otelcov scenario -html`, and `compare -html` in the lab) showing a coverage matrix across scenarios, each pod's route (lineage) on the pipeline graph, and real vs predicted; no build step (Go `html/template`, plain JavaScript, data embedded as JSON) | A local web server (`otelcov serve`); both; a React app with a build step | Opens anywhere, works as a CI/PR artifact, nothing new to install |
 | 50 | The report page embeds only what it shows: route signals and their copies, their events, the events the summary and diagnosis cite, and per-node event counts for the whole run | A shorter capture window in the lab; both | A real recording has an event per data point per node (30 MB for two hours of the kind lab); routes need a few dozen. The lab's capture stays as it is |
 | 51 | The k8sattributes model is held to upstream's own tests for feature parity: the cases in collector-contrib's `processor/k8sattributesprocessor/processor_test.go` and `internal/kube/client_test.go` at the pinned version. How they're brought in and kept in sync is open (see Open questions) | Hand-written cases only (as so far) | The model is hand-written (decision 19), and checking it against the 0.134 source found a divergence the hand-written tests missed (see Known gaps). Contrib is Apache-2.0 like otelcov, so its tests can be copied with attribution; the AGPL clean room doesn't apply |
+| 52 | Fix the known gaps first: correctness and reliability before new breadth | Not recorded (decided in a separate session) | Owner's priority |
+| 53 | "Feature rich" means one full end-to-end workflow that delivers value immediately, not many features | Not recorded (decided in a separate session) | Owner's definition |
+| 54 | Two reference stacks: the kind lab, hardened (init-container pod, k8sattributes `filter`, realistic Mimir config with `runtime_config` and non-OTLP limits) and run in CI on every PR against the real stack; and the upstream Helm charts unchanged (OTel Collector chart as daemonset + gateway, `mimir-distributed`, OTel demo app) as a slower acceptance test, e.g. nightly | Not recorded (decided in a separate session) | Owner's choice; reasons not recorded |
+| 55 | Target workflow after the gaps: predict (PR gate with a coverage diff), confirm (post-deploy compare against the real stack), record (hashed inputs, a signed report, e.g. in-toto) | Not recorded (decided in a separate session) | Owner's choice; reasons not recorded |
+| 56 | Bar for approaching design partners, all three: works unchanged on the upstream charts, the PR gate works end to end, a first signed evidence report | Not recorded (decided in a separate session) | Owner's bar |
+| 57 | Requirements format A (see Requirements): `subjects` (kinds as shortcuts for OTel entities), `signal.metrics`, `reaches` with alert destinations (several receivers, receivers templated from the pod's labels, required alert labels) and dashboards, `must_not_reach`. Built first for pods only; the rest is accepted and reported `unverified`. Replaces the current format | B: named subjects and destinations, referenced by requirements; C: policies with `any`/`all`/`none`. For subjects: Kubernetes kinds only; OTel entities only. For owner labels: namespace labels; pod then namespace. Keeping the old format alongside | A keeps the report's "one route, one break" explanation and is the smallest step; B's named blocks can be added later without breaking A files, and C's `any`/`all` waits for real use to show the need. Pod labels are already loaded |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
