@@ -422,6 +422,15 @@ Chosen while building the report page (decision 49):
 
 ## Open questions
 
+- **Plugin design (owner's draft, 2026-11-02), stashed for a later discussion.** Not decided; nothing is built on it yet. The draft, as the owner wrote it:
+  - Stages are plugins: each turns telemetry into telemetry according to its config, using one interface (`Kind`, `Fidelity`, `Configure`, `Apply`). The core runs the topology graph and only follows lineage and reaches verdicts.
+  - Fidelity drives verdicts: real engine, reimplementation, approximation or unmodelled. That gives "covered", "covered (modelled)" or "unverified", and an unknown stage becomes an unmodelled pass-through.
+  - Conformance tests check each plugin against the real component in CI, so fidelity is measured, and version mismatches lower it.
+  - Delivery: in-tree Go packages first; out-of-process plugins (gRPC or WASM) once the interface is stable, which is when vendor packs can live in separate repos.
+  - The same pattern covers inventory sources, failure-mode packs, recording sources and report outputs.
+
+  Where it meets what exists, for the discussion: the Extensibility section (small core plus adapters, a proposed principle) and decision 22 (compiled-in Go; gRPC and WebAssembly under Planned for later); today's node interface (built with config, then `ProcessMetrics`) and `Unsupported` pass-through; the `covered_simulated` status next to the proposed "covered (modelled)"; custom nodes (k8sattributes, resourcedetection, sdk-env) as reimplementations; conformance tests and decision 51 (k8sattributes against upstream's tests, sync mechanism open); the version pin (decision 37).
+
 - **Bringing upstream k8sattributes tests in and keeping them in sync** (decision 51). Cases are ported for now (`internal/nodes/k8sattributes/upstream_test.go` for container identification, `upstream_attrs_test.go` for pod, container, namespace and node attributes and image parsing, each naming its upstream file, test and case); what keeps them in sync is still open. Upstream tests come in two layers: `processor_test.go` feeds the processor pre-built cache entries (`kube.Pod{Containers: ByName/ByID}`), and `internal/kube/client_test.go` checks how a Kubernetes pod becomes those entries. otelcov's model goes from a pod straight to attributes, so each case has to be translated, and Go can't import another module's `_test.go` files or `internal/` packages, so the tests can't be called directly. Options:
   - **Port with provenance, plus a drift check**: each case keeps the upstream file, test and case name and the version; a test reads the upstream test files from the Go module cache at the pinned version (module downloads include `_test.go` files) and fails when their hash differs from the one recorded at the last port, naming the changed tests, so a version bump forces a re-port.
   - **Reference the upstream files directly**: no copies; our tests point at upstream cases by name and the module-cache files are the source of truth. Still needs each case translated in code, so in practice it's the drift check without the copies.
