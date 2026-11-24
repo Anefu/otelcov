@@ -296,6 +296,8 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
   meta.push(scenarios.length === 1 ? "1 scenario" : scenarios.length + " scenarios");
   if (times.length === 1) meta.push("evaluated at " + times[0]);
   if (D.generated) meta.push("written " + D.generated);
+  var tool = scenarios.length && scenarios[0].report && scenarios[0].report.otelcov;
+  if (tool && tool.version) meta.push("otelcov " + tool.version + " (collector-contrib " + tool.collector_contrib + ")");
   document.getElementById("meta").textContent = meta.join(", ");
 
   // Coverage matrix: one row per requirement and pod, one column per scenario.

@@ -1,12 +1,14 @@
 // Command otelcov checks OpenTelemetry monitoring coverage.
 //
 //	otelcov scenario [-root dir] [-json] [-html report.html] scenario.yaml...
+//	otelcov version
 //
 // It runs each scenario and prints, per requirement and pod, whether the pod's
 // signal reaches its alert and receiver, and why not when it doesn't. With
 // -html it also writes one page showing every scenario: a coverage matrix and
 // each pod's route through the stack. The exit status is 1 when anything is
-// not covered, 2 on errors.
+// not covered, 2 on errors. otelcov version prints otelcov's version and the
+// collector release it models.
 package main
 
 import (
@@ -24,15 +26,25 @@ import (
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/report"
 	"github.com/Anefu/otelcov/internal/scenario"
+	"github.com/Anefu/otelcov/internal/version"
 )
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+const usage = `usage:
+  otelcov scenario [-root dir] [-json] [-html report.html] scenario.yaml...
+  otelcov version`
+
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "version" {
+		v := version.Get()
+		fmt.Fprintf(stdout, "otelcov %s\nmodels OpenTelemetry Collector contrib %s (pdata %s)\n", v.Otelcov, v.CollectorContrib, v.Pdata)
+		return 0
+	}
 	if len(args) == 0 || args[0] != "scenario" {
-		fmt.Fprintln(stderr, "usage: otelcov scenario [-root dir] [-json] [-html report.html] scenario.yaml...")
+		fmt.Fprintln(stderr, usage)
 		return 2
 	}
 	fs := flag.NewFlagSet("scenario", flag.ContinueOnError)

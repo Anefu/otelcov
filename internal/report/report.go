@@ -24,6 +24,7 @@ import (
 	"github.com/Anefu/otelcov/internal/promqlx"
 	"github.com/Anefu/otelcov/internal/requirements"
 	"github.com/Anefu/otelcov/internal/topology"
+	"github.com/Anefu/otelcov/internal/version"
 )
 
 // Statuses.
@@ -65,6 +66,9 @@ type Diagnosis struct {
 
 // Report is the result of a run.
 type Report struct {
+	// Otelcov is the otelcov that wrote the report and the collector release
+	// it models.
+	Otelcov   version.Info                        `json:"otelcov"`
 	Scenario  string                              `json:"scenario"`
 	EvalTime  string                              `json:"eval_time"`
 	Summary   []Entry                             `json:"summary"`
@@ -81,6 +85,7 @@ type Report struct {
 func Build(scenario, evalTime string, log *lineage.Log, reqs []requirements.Requirement, pods []corev1.Pod) *Report {
 	ix := newIndex(log)
 	r := &Report{
+		Otelcov:  version.Get(),
 		Scenario: scenario, EvalTime: evalTime,
 		Summary: []Entry{}, Diagnosis: []Diagnosis{},
 		Signals: map[lineage.SignalID]lineage.Signal{}, Events: log.Events(),

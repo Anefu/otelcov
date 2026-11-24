@@ -258,7 +258,7 @@ Other deployment patterns and backends come later, as adapters.
 - **Flow graph** (`internal/flowgraph`, built by `topology.Flow` and `scenario.Run`): the scenario's components in flow order, with lineage node names as IDs (source, sdk-env, each modeled pipeline's processors and exporters following joins, backends, recording rules and alerts with their inputs, Alertmanager routes, receivers). Bad joins carry validation's reason on their edge. `scenario.ReportWithFlow` returns it with the report.
 - **Scenario `description`**: one sentence saying what the scenario changes ("A PR adds a log-shipper sidecar to vllm-embed."), shown under its column and above each route on the report page. It isn't part of the JSON report, so golden reports don't carry it.
 - **Report page** (`internal/htmlreport`, decision 49): `page.html` holds the styles and script; data is embedded as JSON (html/template escapes it, so config text can't end the script). The page shows the coverage matrix (scenarios as columns, real-stack verdicts when compare ran) and, for the selected cell, a strip map: one row per flow node, grouped by part of the stack, the route as a line that stops where it breaks, the root cause ringed, the pod's events beside each node, and event counts for all signals. Data is always rendered as text, never as HTML. The page embeds only what it shows (decision 50): each entry's path signals and the copies made from them, their events, the events the summary and diagnosis cite, and per-node event counts for the whole run. On the kind lab's two-hour recording that's 130 KB instead of 30 MB; `-json` keeps the full lineage.
-- **CLI** (`cmd/otelcov`): `otelcov scenario [-root dir] [-json] [-html page.html] scenario.yaml...`; exit status 1 if anything is not covered, 2 on errors.
+- **CLI** (`cmd/otelcov`): `otelcov scenario [-root dir] [-json] [-html page.html] scenario.yaml...`; exit status 1 if anything is not covered, 2 on errors. `otelcov version` prints otelcov's version and the collector-contrib and pdata versions it's built against (`internal/version`, from the build information).
 
 ### Snapshot metadata
 
@@ -281,7 +281,7 @@ Other deployment patterns and backends come later, as adapters.
 - Actions: `attributed`, `associated`, `set`, `kept`, `removed`, `skipped`, `derived`, `dropped`, `routed`, `exported` (left the modeled system through an external exporter), `unverified` (the node can't tell what really happens; reason says why).
 - Signal ID prefixes: `s` recorded, `c` copies and processor-made items, `p` stored series, `r` rule outputs, `a` alerts.
 - **Record non-events** (`skipped`): in the motivating bug, the root cause is something that *didn't* happen.
-- Report sections: `summary` (per requirement and pod: status, path, receiver or `broken_at`), `diagnosis` (event chain from the break back to the root cause, plus hints), `problems` (non-fatal problems in the inputs: topology validation, unknown pod fields), `signals`, `events`.
+- Report sections: `otelcov` (version, and the collector-contrib and pdata versions it models; decision 63), `summary` (per requirement and pod: status, path, receiver or `broken_at`), `diagnosis` (event chain from the break back to the root cause, plus hints), `problems` (non-fatal problems in the inputs: topology validation, unknown pod fields), `signals`, `events`.
 - Statuses: `covered`, `covered_simulated` (path needs an attribute only sdk-env provided; listed in `simulated_by`), `not_covered`, `unverified` (no telemetry from the pod, or an `unverified` event on the path; listed in `unverified_by`).
 - How the report answers a requirement (`internal/report`):
   - **Sources**: recorded signals of the requirement's metric that sdk-env attributed to the pod and container (or, without attribution and without a required container, that k8sattributes associated with the pod). None: `unverified`, `broken_at: source/otlp-replay`.
@@ -361,6 +361,7 @@ Other deployment patterns and backends come later, as adapters.
 | 60 | Renamed metrics, option 1 (name variants): a series is a selector near miss on `__name__` when its name has the same words as the selector's metric name apart from the suffixes Prometheus's OTLP translation adds (unit, `per_<unit>`, `total`, `ratio`; histogram `bucket`/`count`/`sum` must agree) and separators. The diagnosis follows it to Mimir's translation and to the last processor that changed the metric's name or unit | 2: follow lineage from the series back to its OTLP metric and compare with what the selected name would come from; both | Covers the reproduced case (suffixes turned off) and unit changes with a small, local check; option 2 also covers renames to other words but needs the rule explainer to see lineage, so it waits (Known gaps) |
 | 61 | k8sattributes models every attribute upstream extracts, including labels and annotations from the pod, its namespace and its node, in upstream's order and precedence. Namespaces and nodes are new inputs, read from the scenario's cluster file | Pod-level attributes only (no namespace or node objects); also Deployment and StatefulSet objects | Owner's choice ("also namespace/node"). Unmodeled attributes were `unverified`, and upstream's defaults extract image name and tag, so default configs got `unverified` events. Deployment and StatefulSet objects wait (Known gaps) |
 | 62 | Requirements can come from policies written in CEL. A policy is a subject, a predicate and an object: subjects are selected by a CEL expression over a pod's facts (namespace, labels), and the condition is a CEL expression over the facts otelcov computes for that pod (the alerts that fire for it, with their receivers, labels and source signals). The object can be named ("`VLLMMemoryHigh`") or quantified ("some alert reaching `{{ team }}-pager`"). Failures are diagnosed in three cases: a regression in a diff (explain the path that was lost), a near miss (explain the closest misses from recorded drops and routes), or unwatched (nothing selects the pod's metrics). Severity is block or warn. No estate graph (catalog integration, graph store, query API). Built after the k8sattributes `filter` fix and before the design-partner bar | Extending format A's YAML with `policies:`; Rego over otelcov's facts; a full estate graph with owners and tiers from a catalog; keeping hand-written requirements only | Owner's choice. Hand-written requirements can't see workloads nobody wrote one for; policies over labels can, without building a graph. CEL is familiar from Kubernetes admission policies and can't loop or recurse. Explaining a failed free-form expression is harder than with format A's fixed structure (see Open questions) |
+| 63 | Versions track the collector-contrib release otelcov models: git tags `v0.<contrib minor>.<patch>`, so `v0.134.x` while pinned to collector-contrib 0.134 (decision 37) and a new minor when the pin moves; otelcov's own changes bump the patch. Released as tags only (`go install github.com/Anefu/otelcov/cmd/otelcov@v0.134.0`). `otelcov version` and every report (`otelcov` section) carry otelcov's version and the collector-contrib and pdata versions, read from the binary's build information | SemVer `v0.x` independent of the collector; CalVer; GitHub releases with binaries (GoReleaser); binaries plus a container image | Owner's choice. The version says at a glance which collector otelcov's answers are valid for. Before 1.0 a breaking change to otelcov's own formats (requirements, policies, report) can only show in the patch number, so the tag's notes must say so |
 
 ## Defaults in the fixtures, not yet confirmed by the owner
 
@@ -512,6 +513,17 @@ GOFLAGS=-mod=vendor go test ./...
 - To use a new dependency: add it to `go.mod` and to `internal/deps/tools.go`, push, wait for the workflow, fetch again, then commit the `go.mod`/`go.sum` from the deps branch (they're verified by CI).
 - With normal network access (e.g. on a laptop or in CI), plain `go test ./...` works; vendoring isn't needed.
 
+### Releasing (decision 63)
+
+```sh
+# Tag main with v0.<collector-contrib minor>.<patch>; say in the tag message what changed, breaking changes first
+git tag -a v0.134.0 -m "..." && git push origin v0.134.0
+# Users install by tag; the binary then reports v0.134.0
+go install github.com/Anefu/otelcov/cmd/otelcov@v0.134.0 && otelcov version
+```
+
+A local `go build` reports a pseudo-version from git (`v0.0.0-<date>-<commit>`, `+dirty` with uncommitted changes); `go run` and tests report `devel`. Golden tests don't compare the report's `otelcov` section.
+
 ### Running
 
 ```sh
@@ -562,6 +574,7 @@ internal/requirements     coverage requirements, format A (OTel terms)
 internal/report           summary, diagnosis
 internal/flowgraph        a scenario's components and how they connect, for the report page
 internal/htmlreport       the self-contained report page (page.html)
+internal/version          otelcov and collector versions, from the build information
 internal/scenario         scenario loading, runs, golden tests
 internal/nodes/...        one package per node; nodetest has test helpers
 internal/nodes/realproc   real collector-contrib processors, OTTL statement and condition explanations
