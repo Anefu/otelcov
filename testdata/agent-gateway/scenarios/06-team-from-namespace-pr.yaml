@@ -6,7 +6,6 @@ description: "The agent takes team from the namespace's label, and a PR makes th
 eval_time: 2026-10-23T10:00:30Z
 
 data:
-  recording: ../recordings/staging.otlp.jsonl
   snapshot: ../recordings/staging.meta.yaml
 
 config:

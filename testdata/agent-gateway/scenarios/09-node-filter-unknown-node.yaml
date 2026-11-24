@@ -1,0 +1,15 @@
+# The filtered agents, replayed from the recording that doesn't say which
+# agent received each line: which pods the agent sees isn't known.
+name: 09-node-filter-unknown-node
+description: "Each agent only watches pods on its own node, but the recording doesn't say which agent received the data."
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  snapshot: ../recordings/staging.meta.yaml
+
+config:
+  pods: ../k8s/pods.yaml
+  topology: ../topology-node-filter.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/09-node-filter-unknown-node.report.json

@@ -5,7 +5,6 @@ description: "A new recording, taken after the fix PR (04) was deployed."
 eval_time: 2026-10-23T10:00:30Z
 
 data:
-  recording: ../recordings/fixed.otlp.jsonl
   snapshot: ../recordings/fixed.meta.yaml
 
 config:

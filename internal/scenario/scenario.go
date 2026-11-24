@@ -1,5 +1,6 @@
-// Package scenario loads scenario files: one run's data (a recording and its
-// snapshot metadata), config under test, requirements and expected report.
+// Package scenario loads scenario files: one run's data (snapshot metadata,
+// which lists the recordings), config under test, requirements and expected
+// report.
 package scenario
 
 import (
@@ -20,8 +21,8 @@ type Scenario struct {
 	Description string `json:"description,omitempty"`
 	EvalTime    string `json:"eval_time"`
 	Data        struct {
-		Recording string `json:"recording"`
-		Snapshot  string `json:"snapshot"`
+		// Snapshot is the snapshot metadata, which lists the recordings.
+		Snapshot string `json:"snapshot"`
 	} `json:"data"`
 	Config struct {
 		// Pods in the config under test.
@@ -37,10 +38,12 @@ type Scenario struct {
 	Root string `json:"-"`
 }
 
-// Snapshot is the metadata stored with a recording: the config that was
-// running when it was captured.
+// Snapshot is the metadata stored with recordings: the recordings themselves
+// and the config that was running when they were captured.
 type Snapshot struct {
 	RecordedAt string `json:"recorded_at"`
+	// Recordings are the recorded files, in replay order (decision 64).
+	Recordings []Recording `json:"recordings"`
 	// Pods is the path of the pod specs running at recording time.
 	Pods string `json:"pods"`
 	// ResourceDetection holds what each resourcedetection processor detected
@@ -48,6 +51,18 @@ type Snapshot struct {
 	// config then, and attributes per Kubernetes node name (for daemonsets) or
 	// "*".
 	ResourceDetection map[string]map[string]resourcedetection.Recorded `json:"resource_detection,omitempty"`
+}
+
+// Recording is one recorded file: what one collector instance's tap wrote.
+type Recording struct {
+	File string `json:"file"`
+	// Collector is the tapped collector that received the data; it may be
+	// left out when only one collector has a tap.
+	Collector string `json:"collector,omitempty"`
+	// Node is the Kubernetes node of the collector instance (a daemonset
+	// agent's node). "" when unknown: then a collector whose behavior
+	// depends on its node (k8sattributes filter) gives unverified results.
+	Node string `json:"node,omitempty"`
 }
 
 // Load reads a scenario file and makes its paths absolute. Report paths are
@@ -66,7 +81,7 @@ func Load(path, root string) (*Scenario, error) {
 		return nil, err
 	}
 	for _, p := range []*string{
-		&s.Data.Recording, &s.Data.Snapshot, &s.Config.Pods, &s.Config.Topology,
+		&s.Data.Snapshot, &s.Config.Pods, &s.Config.Topology,
 		&s.Requirements, &s.Expected,
 	} {
 		*p = abs(dir, *p)
@@ -92,6 +107,21 @@ func LoadSnapshot(path string) (*Snapshot, error) {
 		return nil, err
 	}
 	s.Pods = abs(dir, s.Pods)
+	if len(s.Recordings) == 0 {
+		return nil, fmt.Errorf("%s: lists no recordings", path)
+	}
+	seen := map[string]bool{}
+	for i := range s.Recordings {
+		r := &s.Recordings[i]
+		if r.File == "" {
+			return nil, fmt.Errorf("%s: recording %d has no file", path, i)
+		}
+		r.File = abs(dir, r.File)
+		if seen[r.File] {
+			return nil, fmt.Errorf("%s: recording %s is listed twice", path, r.File)
+		}
+		seen[r.File] = true
+	}
 	return &s, nil
 }
 

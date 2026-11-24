@@ -6,7 +6,6 @@ description: "The configs as deployed by default (config/)."
 eval_time: ${EVAL_TIME}
 
 data:
-  recording: ../recording.otlp.jsonl
   snapshot: ../snapshot.meta.yaml
 
 config:

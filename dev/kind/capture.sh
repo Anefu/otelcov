@@ -3,7 +3,8 @@
 # otelcov can replay, in captured/:
 #   tap/<node>.jsonl, detected/<node>.jsonl   raw copies from each agent
 #   pods.yaml, agent.yaml                      the pods, namespaces and nodes, and the agent config that ran
-#   recording.otlp.jsonl, snapshot.meta.yaml   what otelcov replays
+#   recordings/<node>.otlp.jsonl               what otelcov replays, one recording per agent
+#   snapshot.meta.yaml                         lists the recordings with their node, and what was running
 #   scenarios/*.yaml                           otelcov/scenarios with eval_time set
 #   pods-<name>.yaml                           the pods as each whatif/apps-<name>.yaml would make them
 # Each run replaces the previous capture.

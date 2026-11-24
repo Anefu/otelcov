@@ -4,7 +4,6 @@ description: "The agent sends to the gateway's HTTP port (4318) instead of gRPC 
 eval_time: 2026-10-23T10:00:30Z
 
 data:
-  recording: ../recordings/staging.otlp.jsonl
   snapshot: ../recordings/staging.meta.yaml
 
 config:

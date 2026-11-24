@@ -1,0 +1,22 @@
+recorded_at: 2026-10-23T10:00:00Z
+# Recorded while both apps sent to the agents' Service instead of their own
+# node's agent: both export requests reached the agent on kind-worker2, and
+# the agent on kind-worker recorded nothing. collector is left out: agent is
+# the only tapped collector.
+recordings:
+  - file: via-service.otlp.jsonl
+    node: kind-worker2
+pods: ../k8s/pods.yaml
+resource_detection:
+  agent:
+    resourcedetection:
+      config:
+        detectors: [env, system]
+        override: false
+      values:
+        kind-worker:
+          host.name: kind-worker
+          os.type: linux
+        kind-worker2:
+          host.name: kind-worker2
+          os.type: linux

@@ -1,0 +1,34 @@
+# topology.yaml with the filtered agent (scenarios 07-09). Each agent instance
+# gets its own node name, as the downward API gives it to the daemonset's pods.
+version: 1
+collectors:
+  agent:
+    config: collector/agent-node-filter.yaml
+    sha256: ea31e7b2d283a1b9f9acd2f0fea06b6a0235641b30e57c07d8e8588a47d872cc
+    tap: metrics/tap
+    env:
+      K8S_NODE_NAME: {fieldRef: spec.nodeName}
+  gateway:
+    config: collector/gateway.yaml
+    sha256: 3c602d561092fa2cae242e8074e1370e36ef10c74745206a9e2554ca52d35ddb
+backends:
+  mimir:
+    type: mimir-otlp
+    config: backend/mimir.yaml
+    sha256: 38a3060c209c98e72d0e0a290bab9ad0f1a05d53b6aae06e41fbec23987fc592
+consumers:
+  rules:
+    type: prometheus-rules
+    paths: [rules/inference.rules.yaml]
+    reads: mimir
+  alertmanager:
+    type: alertmanager
+    config: alertmanager/alertmanager.yaml
+    reads: rules
+external:
+  - gateway/exporters/debug
+joins:
+  - from: agent/exporters/otlp/gateway
+    to: gateway/receivers/otlp
+  - from: gateway/exporters/otlphttp/mimir
+    to: mimir

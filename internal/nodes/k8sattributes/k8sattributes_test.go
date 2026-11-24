@@ -14,7 +14,7 @@ import (
 
 func node(t *testing.T, raw map[string]any, pods ...corev1.Pod) *Node {
 	t.Helper()
-	n, err := New("collector/k8sattributes", raw, kube.Objects{Pods: pods})
+	n, err := New("collector/k8sattributes", raw, kube.Objects{Pods: pods}, Instance{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,8 @@ func TestPassthroughAndUnknownConfig(t *testing.T) {
 		t.Errorf("passthrough should change nothing: %+v", out.Events)
 	}
 
-	if _, err := New("x", map[string]any{"filter": map[string]any{"namespace": "a"}}, kube.Objects{}); err == nil {
+	labels := []any{map[string]any{"key": "team", "from": "deployment"}}
+	if _, err := New("x", map[string]any{"extract": map[string]any{"labels": labels}}, kube.Objects{}, Instance{}); err == nil {
 		t.Error("unmodeled settings must be rejected, not ignored")
 	}
 }

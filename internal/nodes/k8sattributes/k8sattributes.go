@@ -17,7 +17,9 @@
 //     k8s.container.name or container.id on the resource, or because the pod
 //     has exactly one container, counting init containers (see containers);
 //   - namespace and node attributes are added even when no pod matched, from
-//     the resource's k8s.namespace.name and k8s.node.name.
+//     the resource's k8s.namespace.name and k8s.node.name;
+//   - the filter decides which pods and which node the processor knows at
+//     all, per collector instance (see Filter and Instance).
 package k8sattributes
 
 import (
@@ -48,6 +50,7 @@ type Config struct {
 	PodAssociation []AssociationRule `json:"pod_association"`
 	Extract        Extract           `json:"extract"`
 	Exclude        Exclude           `json:"exclude"`
+	Filter         Filter            `json:"filter"`
 	// The wait settings only delay the collector's start until its pod
 	// cache is synced; a replay knows every pod from the start.
 	WaitForMetadata        bool `json:"wait_for_metadata"`
@@ -134,13 +137,16 @@ type Node struct {
 	rules    []rule
 	exclude  []*regexp.Regexp
 	objs     kube.Objects
-	// index maps pod identifiers (see podIdentifiers) to pods.
-	index map[string]*corev1.Pod
+	watch    watch
+	// index maps pod identifiers (see podIdentifiers) to the pods the
+	// processor sees; all to every pod, to explain the ones it doesn't.
+	index, all map[string]*corev1.Pod
 }
 
-// New builds the node from the processor's raw config and the cluster's
-// objects. name is the node name in lineage, e.g. "collector/k8sattributes".
-func New(name string, raw map[string]any, objs kube.Objects) (*Node, error) {
+// New builds the node from the processor's raw config, the cluster's objects
+// and the collector instance it runs in. name is the node name in lineage,
+// e.g. "collector/k8sattributes".
+func New(name string, raw map[string]any, objs kube.Objects, inst Instance) (*Node, error) {
 	var cfg Config
 	if err := collector.Decode(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("unsupported k8sattributes config: %w", err)
@@ -189,6 +195,9 @@ func New(name string, raw map[string]any, objs kube.Objects) (*Node, error) {
 	if n.rules, err = compileRules(cfg.Extract); err != nil {
 		return nil, err
 	}
+	if n.watch, err = compileFilter(cfg.Filter, inst); err != nil {
+		return nil, err
+	}
 	n.indexPods()
 	return n, nil
 }
@@ -222,7 +231,10 @@ func (n *Node) process(it unit.Metric) []lineage.Event {
 	// wrote theirs.
 	view := pcommon.NewMap()
 	attrs.CopyTo(view)
-	pod := n.associate(attrs, emit)
+	pod, why, detail := n.associate(attrs, emit)
+	if pod == nil {
+		n.noPod(ps, why, detail)
+	}
 	var id identified
 	if pod != nil {
 		n.podStage(ps, pod)
@@ -259,26 +271,64 @@ func (n *Node) process(it unit.Metric) []lineage.Event {
 // associate finds the pod the resource belongs to, as the processor does:
 // the first pod_association rule whose attributes the resource has gives the
 // identifier, and only a pod with that identifier matches (pod_association.go,
-// extractPodID; client.go, GetPod). Ignored pods don't match.
-func (n *Node) associate(attrs pcommon.Map, emit func(lineage.Event)) *corev1.Pod {
+// extractPodID; client.go, GetPod). Ignored pods, and pods the filter leaves
+// out, don't match. Without a pod, why and detail say why not, for the
+// attributes that weren't added.
+func (n *Node) associate(attrs pcommon.Map, emit func(lineage.Event)) (pod *corev1.Pod, why string, detail map[string]any) {
 	key, via, ok := n.podID(attrs)
 	if !ok {
-		emit(lineage.Event{Action: lineage.Skipped,
-			Reason: "the resource has no value for any pod_association rule (a replay has no connection address), so no pod was looked up and no pod attributes were added"})
-		return nil
+		why = "the resource has no value for any pod_association rule (a replay has no connection address)"
+		emit(lineage.Event{Action: lineage.Skipped, Reason: why + ", so no pod was looked up and no pod attributes were added"})
+		return nil, why, map[string]any{"association": "no_identifier"}
 	}
 	pod, found := n.index[key]
 	if !found {
-		emit(lineage.Event{Action: lineage.Skipped, Reason: "no pod matches " + via + ", so no pod attributes were added"})
-		return nil
+		if hidden, ok := n.all[key]; ok {
+			hides, filter := n.watch.hides(hidden)
+			why = "pod `" + kube.Ref(hidden) + "` matches " + via + ", but the processor never sees it: " + hides
+			emit(lineage.Event{Action: lineage.Skipped, Detail: map[string]any{"pod": kube.Ref(hidden), "via": via}, Reason: why + ", so no pod attributes were added"})
+			detail = map[string]any{"association": "filtered", "filter": filter, "pod": kube.Ref(hidden)}
+			if filter == "node" {
+				detail["pod_node"], detail["watched_node"] = hidden.Spec.NodeName, n.watch.node
+			}
+			return nil, why, detail
+		}
+		why = "no pod matches " + via
+		emit(lineage.Event{Action: lineage.Skipped, Reason: why + ", so no pod attributes were added"})
+		return nil, why, map[string]any{"association": "no_match"}
 	}
-	if why := n.ignored(pod); why != "" {
-		emit(lineage.Event{Action: lineage.Skipped, Detail: map[string]any{"pod": kube.Ref(pod), "via": via},
-			Reason: "pod " + kube.Ref(pod) + " matches, but the processor ignores it: " + why + ", so no pod attributes were added"})
-		return nil
+	if ignored := n.ignored(pod); ignored != "" {
+		why = "pod " + kube.Ref(pod) + " matches, but the processor ignores it: " + ignored
+		emit(lineage.Event{Action: lineage.Skipped, Detail: map[string]any{"pod": kube.Ref(pod), "via": via}, Reason: why + ", so no pod attributes were added"})
+		return nil, why, map[string]any{"association": "ignored", "pod": kube.Ref(pod)}
 	}
 	emit(lineage.Event{Action: lineage.Associated, Detail: map[string]any{"pod": kube.Ref(pod), "via": via}})
-	return pod
+	if n.watch.nodeUnknown != "" {
+		emit(lineage.Event{Action: lineage.Unverified, Detail: map[string]any{"pod": kube.Ref(pod)},
+			Reason: "pod `" + kube.Ref(pod) + "` matches, but " + n.watch.nodeUnknown + ", so whether the processor sees a pod on node `" + pod.Spec.NodeName + "` isn't known"})
+	}
+	return pod, "", nil
+}
+
+// noPod records that the pod's and its containers' attributes weren't
+// added, and why: the diagnosis cites it when a label one of them becomes is
+// missing. key_regex rules name no attribute; the association event covers
+// them.
+func (n *Node) noPod(ps *proposals, why string, detail map[string]any) {
+	for _, key := range n.cfg.Extract.Metadata {
+		if key != "k8s.node.uid" {
+			p := skip(why)
+			p.detail = detail
+			ps.add(stagePod, key, p)
+		}
+	}
+	for _, r := range n.rules {
+		if r.from == fromPod && r.regex == nil {
+			p := skip(why)
+			p.detail = detail
+			ps.add(stagePod, r.name, p)
+		}
+	}
 }
 
 // podID is the processor's pod identifier for a resource: the first
@@ -323,16 +373,25 @@ func attrPart(name, v string) string  { return "resource_attribute|" + name + "=
 // indexPods stores each pod under its identifiers (client.go,
 // getIdentifiersFromAssoc, addOrUpdatePod): one per pod_association rule the
 // pod has values for, plus its UID and, unless it uses the host network, its
-// IP. When pods share an identifier, the one that started later wins.
+// IP. When pods share an identifier, the one that started later wins. Pods
+// the filter leaves out only go into all.
 func (n *Node) indexPods() {
-	n.index = map[string]*corev1.Pod{}
+	n.index, n.all = map[string]*corev1.Pod{}, map[string]*corev1.Pod{}
+	put := func(index map[string]*corev1.Pod, k string, pod *corev1.Pod) {
+		if old, ok := index[k]; ok && pod.Status.StartTime.Before(old.Status.StartTime) {
+			return
+		}
+		index[k] = pod
+	}
 	for i := range n.objs.Pods {
 		pod := &n.objs.Pods[i]
+		hidden, _ := n.watch.hides(pod)
+		visible := hidden == ""
 		for _, k := range n.podIdentifiers(pod) {
-			if old, ok := n.index[k]; ok && pod.Status.StartTime.Before(old.Status.StartTime) {
-				continue
+			put(n.all, k, pod)
+			if visible {
+				put(n.index, k, pod)
 			}
-			n.index[k] = pod
 		}
 	}
 }
@@ -928,12 +987,17 @@ func (n *Node) namespaceStage(ps *proposals, ns string) {
 func (n *Node) nodeStage(ps *proposals, name string) {
 	watches := n.metadata["k8s.node.uid"]
 	obj, missing := n.object(fromNode, name)
+	hidden := n.watch.hidesNode(name)
 	for _, r := range n.rules {
 		if r.from != fromNode {
 			continue
 		}
 		watches = true
-		if obj == nil {
+		switch {
+		case hidden != "":
+			r.skip(ps, stageNode, hidden)
+			continue
+		case obj == nil:
 			r.unknown(ps, stageNode, missing)
 			continue
 		}
@@ -945,6 +1009,8 @@ func (n *Node) nodeStage(ps *proposals, name string) {
 	}
 	switch {
 	case !watches:
+	case hidden != "":
+		ps.add(stageNodeUID, "k8s.node.uid", skip(hidden))
 	case obj == nil:
 		ps.add(stageNodeUID, "k8s.node.uid", unknown(missing))
 	case obj.UID != "":
@@ -967,6 +1033,9 @@ func (n *Node) object(from, name string) (*objectMeta, string) {
 		}
 		return nil, "namespace `" + name + "` isn't in the cluster file"
 	default:
+		if why := n.watch.nodeUnknown; why != "" {
+			return nil, why + ", so it isn't known whether the processor knows node `" + name + "`"
+		}
 		if len(n.objs.Nodes) == 0 {
 			return nil, "the cluster file has no Node objects, so node `" + name + "`'s labels, annotations and UID aren't known"
 		}
@@ -1017,6 +1086,8 @@ type proposal struct {
 	reason string
 	stage  int
 	slice  bool // container.image.repo_digests is a list
+	// detail goes on a skip's event.
+	detail map[string]any
 	// overwrite: set even when the resource has a value (service.namespace).
 	overwrite bool
 }
@@ -1146,7 +1217,7 @@ func (ps *proposals) resolve(attrs pcommon.Map, pod *corev1.Pod, id identified) 
 		}
 		switch {
 		case chosen == nil:
-			out = append(out, lineage.Event{Attribute: key, Action: lineage.Skipped, Reason: skipped.reason})
+			out = append(out, lineage.Event{Attribute: key, Action: lineage.Skipped, Reason: skipped.reason, Detail: skipped.detail})
 		case chosen.act == actUnknown:
 			out = append(out, lineage.Event{Attribute: key, Action: lineage.Unverified, Reason: chosen.reason})
 		default:
@@ -1267,6 +1338,16 @@ func (r rule) propose(ps *proposals, stage int, src map[string]string, whose str
 		from[name] = k
 		ps.add(stage, name, write(v, fmt.Sprintf("from %s %s `%s`", whose, r.singular(), k)))
 	}
+}
+
+// skip records that the processor doesn't know the rule's source object.
+func (r rule) skip(ps *proposals, stage int, why string) {
+	if r.regex == nil {
+		ps.add(stage, r.name, skip(why))
+		return
+	}
+	ps.notes = append(ps.notes, lineage.Event{Action: lineage.Skipped,
+		Reason: fmt.Sprintf("%s matching `%s` from the %s aren't copied: %s", r.field, r.regex.String(), r.from, why)})
 }
 
 // unknown records that the rule's source object is missing.

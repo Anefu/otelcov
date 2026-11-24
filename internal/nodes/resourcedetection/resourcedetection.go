@@ -42,17 +42,20 @@ type Node struct {
 	// stale says why recorded values may not hold, or is "".
 	stale string
 	pods  *kube.Pods
+	// node is the collector instance's node, or "" when unknown.
+	node string
 }
 
-// New builds the node. raw is the processor's config under test; rec is what
-// the snapshot recorded for this processor (nil if nothing). snapshotPods map
-// a signal to the node its collector instance ran on.
-func New(name string, raw map[string]any, rec *Recorded, snapshotPods []corev1.Pod) (*Node, error) {
+// New builds the node for one collector instance. raw is the processor's
+// config under test; rec is what the snapshot recorded for this processor
+// (nil if nothing); node is the instance's node, "" when unknown, and then
+// snapshotPods map a signal to its sender's node instead.
+func New(name string, raw map[string]any, rec *Recorded, snapshotPods []corev1.Pod, node string) (*Node, error) {
 	override, err := overrideOf(raw)
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{name: name, override: override, rec: rec, pods: kube.NewPods(snapshotPods)}
+	n := &Node{name: name, override: override, rec: rec, pods: kube.NewPods(snapshotPods), node: node}
 	if rec != nil && !reflect.DeepEqual(withoutOverride(raw), withoutOverride(rec.Config)) {
 		n.stale = "the detector settings differ from the ones the snapshot was recorded with, so the recorded values may not hold; record a new snapshot to check"
 	}
@@ -92,10 +95,15 @@ func (n *Node) ProcessMetrics(_ context.Context, in []unit.Metric) (graph.Output
 			e.Node, e.Signal = n.name, it.ID
 			out.Events = append(out.Events, e)
 		}
-		node := ""
-		if ip, ok := attrs.Get("k8s.pod.ip"); ok {
-			if p, ok := n.pods.ByIP(ip.AsString()); ok {
-				node = p.Spec.NodeName
+		// The processor detects its own host: the node of the collector
+		// instance, when the recording says it. Otherwise the sender's node,
+		// which is the same when apps send to their node's agent.
+		node := n.node
+		if node == "" {
+			if ip, ok := attrs.Get("k8s.pod.ip"); ok {
+				if p, ok := n.pods.ByIP(ip.AsString()); ok {
+					node = p.Spec.NodeName
+				}
 			}
 		}
 		var detected map[string]string

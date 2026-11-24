@@ -7,7 +7,6 @@ description: "A PR drops OTEL_RESOURCE_ATTRIBUTES from vllm-embed, the pod with 
 eval_time: ${EVAL_TIME}
 
 data:
-  recording: ../recording.otlp.jsonl
   snapshot: ../snapshot.meta.yaml
 
 config:

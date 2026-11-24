@@ -1,0 +1,16 @@
+# The same agents, recorded while the apps sent to the agents' Service: both
+# apps' data reached the agent on kind-worker2, which never sees vllm-chat
+# (on kind-worker).
+name: 08-node-filter-via-service
+description: "Each agent only watches pods on its own node, and both apps' data reached the agent on kind-worker2 through the agents' Service."
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  snapshot: ../recordings/via-service.meta.yaml
+
+config:
+  pods: ../k8s/pods.yaml
+  topology: ../topology-node-filter.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/08-node-filter-via-service.report.json

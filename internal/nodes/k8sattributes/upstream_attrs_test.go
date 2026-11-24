@@ -235,7 +235,7 @@ func TestUpstreamAttributeCases(t *testing.T) {
 				"pod_association": []any{map[string]any{"sources": []any{map[string]any{"from": "resource_attribute", "name": "k8s.pod.uid"}}}},
 				"extract":         tc.extract,
 			}
-			n, err := New("collector/k8sattributes", cfg, objs)
+			n, err := New("collector/k8sattributes", cfg, objs, Instance{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -263,7 +263,7 @@ func TestUpstreamAttributeCases(t *testing.T) {
 			"pod_association": []any{map[string]any{"sources": []any{map[string]any{"from": "resource_attribute", "name": "k8s.pod.uid"}}}},
 			"extract": map[string]any{"metadata": []any{"container.image.name", "container.image.tag", "container.id",
 				"container.image.repo_digests", "service.version", "service.instance.id"}},
-		}, kube.Objects{Pods: []corev1.Pod{pod}})
+		}, kube.Objects{Pods: []corev1.Pod{pod}}, Instance{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -353,7 +353,7 @@ func TestNamespaceAndNodeWithoutPod(t *testing.T) {
 			map[string]any{"tag_name": "zone", "key": "topology.kubernetes.io/zone", "from": "node"},
 		},
 	}}
-	n, err := New("collector/k8sattributes", cfg, kube.Objects{Namespaces: []corev1.Namespace{ns}})
+	n, err := New("collector/k8sattributes", cfg, kube.Objects{Namespaces: []corev1.Namespace{ns}}, Instance{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestNamespaceAndNodeWithoutPod(t *testing.T) {
 	// A label the namespace doesn't have is a non-event the diagnosis can name.
 	n, err = New("collector/k8sattributes", map[string]any{"extract": map[string]any{"metadata": []any{},
 		"labels": []any{map[string]any{"tag_name": "owner", "key": "owner", "from": "namespace"}}}},
-		kube.Objects{Namespaces: []corev1.Namespace{ns}})
+		kube.Objects{Namespaces: []corev1.Namespace{ns}}, Instance{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestConfigErrors(t *testing.T) {
 		"deployment objects":   {"labels": []any{map[string]any{"key": "a", "from": "deployment"}}},
 		"bad regex":            {"annotations": []any{map[string]any{"key_regex": "("}}},
 	} {
-		if _, err := New("x", map[string]any{"extract": extract}, kube.Objects{}); err == nil {
+		if _, err := New("x", map[string]any{"extract": extract}, kube.Objects{}, Instance{}); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
@@ -408,7 +408,7 @@ func TestProcessorOrder(t *testing.T) {
 	run := func(t *testing.T, pod corev1.Pod, objs kube.Objects, extract map[string]any, res map[string]string) (map[string]string, []lineage.Event) {
 		t.Helper()
 		objs.Pods = []corev1.Pod{pod}
-		n, err := New("collector/k8sattributes", map[string]any{"pod_association": assoc, "extract": extract}, objs)
+		n, err := New("collector/k8sattributes", map[string]any{"pod_association": assoc, "extract": extract}, objs, Instance{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -507,11 +507,11 @@ func TestMoreConfigErrors(t *testing.T) {
 		"bad exclude":         {"exclude": map[string]any{"pods": []any{map[string]any{"name": "("}}}},
 		"unknown source from": {"pod_association": []any{map[string]any{"sources": []any{map[string]any{"from": "label", "name": "x"}}}}},
 	} {
-		if _, err := New("x", cfg, kube.Objects{}); err == nil {
+		if _, err := New("x", cfg, kube.Objects{}, Instance{}); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
-	if _, err := New("x", map[string]any{"wait_for_metadata": true, "wait_for_metadata_timeout": "10s", "auth_type": "kubeConfig", "context": "kind"}, kube.Objects{}); err != nil {
+	if _, err := New("x", map[string]any{"wait_for_metadata": true, "wait_for_metadata_timeout": "10s", "auth_type": "kubeConfig", "context": "kind"}, kube.Objects{}, Instance{}); err != nil {
 		t.Errorf("settings that don't change output should be accepted: %v", err)
 	}
 }

@@ -42,8 +42,11 @@ type Collector struct {
 	SnapshotPipelines []string `json:"snapshot_pipelines,omitempty"`
 	// FeatureGates as passed with --feature-gates: "gate" or "-gate".
 	FeatureGates []string `json:"feature_gates,omitempty"`
-	// Env provides values for ${env:VAR} references in the config.
-	Env map[string]string `json:"env,omitempty"`
+	// Env gives the collector's environment variables: values for ${env:VAR}
+	// references in the config, and variables processors read by name (such
+	// as k8sattributes filter.node_from_env_var). A value is a string or
+	// {fieldRef: spec.nodeName}, the node of each collector instance.
+	Env map[string]collector.EnvVar `json:"env,omitempty"`
 }
 
 // Recording reports whether a pipeline only records data for otelcov (the
@@ -180,12 +183,12 @@ func FileHash(path string) (string, error) {
 }
 
 // LoadCollector reads a collector's config, with ${env:VAR} and ${VAR}
-// references replaced from the topology's env values. Unresolved references
-// stay as written.
+// references replaced from the topology's literal env values. Unresolved
+// references, and references to fieldRef values, stay as written.
 func (f *File) LoadCollector(name string) (*collector.Config, error) {
 	c, ok := f.Collectors[name]
 	if !ok {
 		return nil, fmt.Errorf("no collector %q", name)
 	}
-	return collector.LoadWithEnv(c.Config, c.Env)
+	return collector.LoadWithEnv(c.Config, collector.Literals(c.Env))
 }

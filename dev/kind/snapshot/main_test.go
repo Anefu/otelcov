@@ -206,6 +206,16 @@ func TestKindSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// One recording per agent, with its node, and without the cut-off line.
+	if len(snap.Recordings) != 2 {
+		t.Fatalf("recordings: %+v", snap.Recordings)
+	}
+	for _, r := range snap.Recordings {
+		b, err := os.ReadFile(r.File)
+		if err != nil || r.Collector != "agent" || filepath.Base(r.File) != r.Node+".otlp.jsonl" || strings.Count(string(b), "\n") != 20 {
+			t.Errorf("recording %+v: %d lines, %v", r, strings.Count(string(b), "\n"), err)
+		}
+	}
 	rec := snap.ResourceDetection["agent"]["resourcedetection"]
 	if rec.Values["otelcov-worker2"]["host.name"] != "otelcov-worker2" || rec.Values["otelcov-worker"]["os.type"] != "linux" || rec.Config["override"] != false {
 		t.Errorf("resource detection: %+v", rec)

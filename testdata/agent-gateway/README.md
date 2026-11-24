@@ -23,7 +23,7 @@ The rule selects `team="inference"`, and `team` comes from the gateway's `transf
 
 ## Scenarios
 
-All six replay the same recording with different config.
+01–06 and 09 replay the same recording (`staging`, one file for both agents, without nodes) with different config; 07 replays it split per agent, and 08 a recording where both apps reached one agent.
 
 | Scenario | Config under test | Expected for both pods |
 |---|---|---|
@@ -33,6 +33,9 @@ All six replay the same recording with different config.
 | `04-init-container-pr` | PR adds an `istio-init` init container to vllm-chat | vllm-chat not covered: k8sattributes counts init containers, so it can't name the container (root cause in the diagnosis); vllm-embed still covered |
 | `05-suffixes-off-pr` | PR turns off Mimir's `otel_metric_suffixes_enabled` | not covered: the series arrive as `process_memory_usage`, the rule selects `process_memory_usage_bytes`; root cause Mimir's translation |
 | `06-team-from-namespace-pr` | the agent copies `team` from the namespace's `team` label, and the gateway runs 02's PR | covered: `team` comes from the namespace (`agent/k8sattributes`, "from namespace `inference`'s label `team`"), so the statement no longer matters |
+| `07-node-filter` | each agent only watches pods on its own node (`filter.node_from_env_var: K8S_NODE_NAME`, `{fieldRef: spec.nodeName}` in the topology); one recording per agent | covered: each app's data reached its own node's agent |
+| `08-node-filter-via-service` | the same agents; recorded while both apps sent to the agents' Service, so both reached the agent on `kind-worker2` | vllm-chat not covered: the agent on `kind-worker2` never sees it (it runs on `kind-worker`), so no pod attributes; root cause `agent/k8sattributes`, hint to send to its own node's agent. vllm-embed covered |
+| `09-node-filter-unknown-node` | the same agents, replayed from `staging`, which doesn't say which agent received each line | unverified: whether the agent sees each pod depends on its node, which isn't known |
 
 ## Layout
 
@@ -42,8 +45,11 @@ All six replay the same recording with different config.
 | `collector/agent.yaml` | Daemonset agent: `metrics` pipeline plus the `metrics/tap` pipeline that records input (k8sattributes in passthrough mode, file exporter) |
 | `collector/gateway.yaml` | Gateway deployment |
 | `collector/gateway-pr.yaml`, `collector/agent-badport.yaml` | The changed configs for scenarios 02 and 03 |
-| `recordings/staging.otlp.jsonl` | Tap output: one OTLP/JSON export request per line |
-| `recordings/staging.meta.yaml` | Snapshot metadata: pod specs and what each resourcedetection processor detected, per node, with its config at recording time |
+| `recordings/staging.otlp.jsonl` | Tap output: one OTLP/JSON export request per line, both agents in one file |
+| `recordings/kind-worker*.otlp.jsonl`, `recordings/staging-nodes.meta.yaml` | The same lines split per agent, and a snapshot listing each with its node (scenario 07) |
+| `recordings/via-service.*` | Both lines as recorded by the agent on `kind-worker2` (scenario 08) |
+| `collector/agent-node-filter.yaml`, `topology-node-filter.yaml` | The agent with the node filter, and a topology giving each agent instance its node (scenarios 07–09) |
+| `recordings/staging.meta.yaml` | Snapshot metadata: the recording, pod specs and what each resourcedetection processor detected, per node, with its config at recording time |
 | `k8s/pods.yaml` | Pods as the API returns them |
 | `k8s/pods-init-container.yaml` | The same pods, with an init container added to vllm-chat (scenario 04) |
 | `k8s/cluster-namespace-team.yaml` | The same pods and their namespace, labeled `team: inference`, as one List (scenario 06) |
@@ -79,3 +85,5 @@ and update the `sha256` fields, or the report will warn that the topology may be
 - **Identifiers quoted, one hint for a skipped statement** (02): explanations put identifiers in backticks; the two hints became one that says what to change ("Make the condition `...` in `gateway/transform/team` hold for this pod, or set `team` another way") instead of restating the explanation; the skipped events carry the statement's condition as `detail.where`.
 - **05 created** (2026-10-28) with name-variant near misses (decision 60): both pods not covered at the rule, a `dropped` event on `__name__` ("the selector wants metric \"process_memory_usage_bytes\"; this series is named \"process_memory_usage\", …"), root cause Mimir's `derived` event for the series. Before decision 60 this run gave `unverified` with no diagnosis. The other reports didn't change.
 - **06 created** (2026-10-28) with k8sattributes namespace labels (decision 61): both pods covered, `team` set by `agent/k8sattributes` from the namespace's label; the PR's transform statement leaves no `skipped` event, since running it without its condition changes nothing. The other reports didn't change: the fixtures' k8sattributes configs list only attributes that were already modeled.
+- **Recordings move into the snapshot metadata** (decision 64): scenarios name only the snapshot; `staging.meta.yaml` lists `staging.otlp.jsonl`. No report changed.
+- **07–09 created** (2026-11-24) with the k8sattributes `filter` (decisions 64, 65). 07: both covered; its report differs from 01 only in signal origins and event order (each agent's recording runs to the end before the next). 08: vllm-chat not covered at the rule (no `k8s_container_name`), root cause `agent/k8sattributes`'s `skipped` `k8s.container.name` ("pod `inference/vllm-chat-…` matches …, but the processor never sees it: it runs on node `kind-worker`, …"), hint to send to the collector on `kind-worker`; resourcedetection sets `host.name: kind-worker2`, the agent's own host. 09: both unverified, by an `unverified` event at `agent/k8sattributes` per pod.

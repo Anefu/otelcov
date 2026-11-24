@@ -29,7 +29,7 @@ The story: staging runs single-container pods; a PR adds a sidecar and is caught
 | Path | What it is |
 |---|---|
 | `recordings/*.otlp.jsonl` | Tap output: one OTLP/JSON export request per line, as the file exporter writes it |
-| `recordings/*.meta.yaml` | Snapshot metadata: the pod specs that were running when it was recorded |
+| `recordings/*.meta.yaml` | Snapshot metadata: the recording, and the pod specs that were running when it was recorded |
 | `k8s/pods-*.yaml` | Pods as the API returns them (spec + status) |
 | `topology.yaml` | One collector (`collector`, tapped at `metrics/tap`) joined to the Mimir backend; rules read Mimir, Alertmanager reads the rules |
 | `collector/collector.yaml` | Staging collector: the real `metrics` pipeline, plus the `metrics/tap` pipeline that produces recordings |

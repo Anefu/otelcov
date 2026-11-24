@@ -8,6 +8,9 @@ collectors:
     # Records what resourcedetection adds; capture.sh turns it into snapshot
     # metadata. Not part of the modeled system.
     snapshot_pipelines: [metrics/detected]
+    # As k8s/agent.yaml sets it: each agent's own node, for the k8sattributes filter.
+    env:
+      K8S_NODE_NAME: {fieldRef: spec.nodeName}
   gateway:
     config: ../config/gateway.yaml
 backends:

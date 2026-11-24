@@ -1,0 +1,24 @@
+recorded_at: 2026-10-23T10:00:00Z
+# The same data as staging.otlp.jsonl, one recording per agent: each app sent
+# to the agent on its own node.
+recordings:
+  - file: kind-worker.otlp.jsonl
+    collector: agent
+    node: kind-worker
+  - file: kind-worker2.otlp.jsonl
+    collector: agent
+    node: kind-worker2
+pods: ../k8s/pods.yaml
+resource_detection:
+  agent:
+    resourcedetection:
+      config:
+        detectors: [env, system]
+        override: false
+      values:
+        kind-worker:
+          host.name: kind-worker
+          os.type: linux
+        kind-worker2:
+          host.name: kind-worker2
+          os.type: linux

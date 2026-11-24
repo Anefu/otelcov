@@ -22,31 +22,47 @@ const Name = "source/otlp-replay"
 // maxLine bounds one export request; the file exporter writes one per line.
 const maxLine = 64 << 20
 
-// Replay reads a metrics recording and splits it into items, one per data
-// point, with IDs s1, s2, ... in file order.
-type Replay struct {
-	path string
-	// display is the path shown in signal origins.
-	display string
+// File is one recorded file.
+type File struct {
+	Path string
+	// Display is how the file is named in signal origins.
+	Display string
 }
 
-// New returns a source for the recording at path. display is how the file is
-// named in reports.
-func New(path, display string) *Replay {
-	return &Replay{path: path, display: display}
+// Replay reads metrics recordings, file by file, and splits them into items,
+// one per data point, with IDs s1, s2, ... in order.
+type Replay struct {
+	files []File
+	// FileOf says which file (an index into the files given to New) each
+	// item came from, once ReadMetrics has run.
+	FileOf map[lineage.SignalID]int
+}
+
+// New returns a source for the recordings, replayed in the order given.
+func New(files ...File) *Replay {
+	return &Replay{files: files, FileOf: map[lineage.SignalID]int{}}
 }
 
 func (r *Replay) Name() string { return Name }
 
 func (r *Replay) ReadMetrics(ctx context.Context) (graph.Output, error) {
-	f, err := os.Open(r.path)
+	var out graph.Output
+	for i, f := range r.files {
+		if err := r.read(ctx, i, f, &out); err != nil {
+			return graph.Output{}, err
+		}
+	}
+	return out, nil
+}
+
+func (r *Replay) read(ctx context.Context, index int, file File, out *graph.Output) error {
+	f, err := os.Open(file.Path)
 	if err != nil {
-		return graph.Output{}, err
+		return err
 	}
 	defer f.Close()
 
 	var (
-		out  graph.Output
 		u    pmetric.JSONUnmarshaler
 		line int
 	)
@@ -55,30 +71,31 @@ func (r *Replay) ReadMetrics(ctx context.Context) (graph.Output, error) {
 	for sc.Scan() {
 		line++
 		if err := ctx.Err(); err != nil {
-			return graph.Output{}, err
+			return err
 		}
 		if len(sc.Bytes()) == 0 {
 			continue
 		}
 		md, err := u.UnmarshalMetrics(sc.Bytes())
 		if err != nil {
-			return graph.Output{}, fmt.Errorf("%s:%d: %w", r.display, line, err)
+			return fmt.Errorf("%s:%d: %w", file.Display, line, err)
 		}
 		for _, part := range unit.SplitMetrics(md) {
 			id := lineage.SignalID("s" + strconv.Itoa(len(out.Items)+1))
+			r.FileOf[id] = index
 			out.Items = append(out.Items, unit.Metric{ID: id, Data: part})
 			out.Signals = append(out.Signals, lineage.Signal{
 				ID:       id,
 				Node:     Name,
 				Kind:     "otlp_metric",
 				Name:     unit.FirstMetric(part).Name(),
-				Origin:   r.display + "#L" + strconv.Itoa(line),
+				Origin:   file.Display + "#L" + strconv.Itoa(line),
 				Resource: unit.Resource(part).Attributes().AsRaw(),
 			})
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return graph.Output{}, fmt.Errorf("%s: %w", r.display, err)
+		return fmt.Errorf("%s: %w", file.Display, err)
 	}
-	return out, nil
+	return nil
 }

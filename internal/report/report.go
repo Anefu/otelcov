@@ -67,8 +67,8 @@ type Diagnosis struct {
 // Report is the result of a run.
 type Report struct {
 	// Otelcov is the otelcov that wrote the report and the collector release
-	// it models.
-	Otelcov   version.Info                        `json:"otelcov"`
+	// it models. Golden reports leave it out.
+	Otelcov   *version.Info                       `json:"otelcov,omitempty"`
 	Scenario  string                              `json:"scenario"`
 	EvalTime  string                              `json:"eval_time"`
 	Summary   []Entry                             `json:"summary"`
@@ -84,8 +84,9 @@ type Report struct {
 // the config under test.
 func Build(scenario, evalTime string, log *lineage.Log, reqs []requirements.Requirement, pods []corev1.Pod) *Report {
 	ix := newIndex(log)
+	v := version.Get()
 	r := &Report{
-		Otelcov:  version.Get(),
+		Otelcov:  &v,
 		Scenario: scenario, EvalTime: evalTime,
 		Summary: []Entry{}, Diagnosis: []Diagnosis{},
 		Signals: map[lineage.SignalID]lineage.Signal{}, Events: log.Events(),
@@ -632,7 +633,22 @@ func (ix *index) diagnoseName(c check, entry Entry, d *Diagnosis, nm map[string]
 
 func hints(chk check, attr string, root lineage.Event, matcher, where string) []string {
 	c := chk.container
+	assoc, _ := root.Detail["association"].(string)
 	switch {
+	case assoc != "" && strings.HasSuffix(root.Node, "k8sattributes"):
+		// k8sattributes found no pod, so none of its attributes were added.
+		filter, _ := root.Detail["filter"].(string)
+		podNode, _ := root.Detail["pod_node"].(string)
+		switch {
+		case assoc == "filtered" && filter == "node" && podNode != "":
+			return []string{fmt.Sprintf("Send this pod's telemetry to the collector on its own node, %s: for example to the node's IP (%s from the downward API), or through a Service with %s.",
+				q(podNode), q("status.hostIP"), q("internalTrafficPolicy: Local"))}
+		case assoc == "filtered":
+			return []string{fmt.Sprintf("Make the %s of %s include this pod, or send its telemetry to a collector that watches it.", q("filter"), q(root.Node))}
+		case assoc == "ignored":
+			return []string{fmt.Sprintf("Stop %s ignoring this pod (%s, or the pod's ignore annotation), or set %s another way.", q(root.Node), q("exclude"), q(attr))}
+		}
+		return []string{fmt.Sprintf("Make sure this pod's telemetry carries what the %s rules of %s look pods up by, such as %s.", q("pod_association"), q(root.Node), q("k8s.pod.ip"))}
 	case strings.HasSuffix(root.Node, "k8sattributes") && attr == "k8s.container.name" && c != "":
 		return []string{
 			fmt.Sprintf("Set %s in %s on the %s container.", q("k8s.container.name="+c), q("OTEL_RESOURCE_ATTRIBUTES"), q(c)),

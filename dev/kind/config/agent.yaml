@@ -15,6 +15,9 @@ receivers:
 processors:
   k8sattributes:
     auth_type: serviceAccount
+    # Only this node's pods (K8S_NODE_NAME is spec.nodeName, see k8s/agent.yaml).
+    filter:
+      node_from_env_var: K8S_NODE_NAME
     pod_association:
       - sources:
           - from: resource_attribute

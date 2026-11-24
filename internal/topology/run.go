@@ -70,28 +70,51 @@ func NewRunner(f *File, v *Validation, in Inputs, log *lineage.Log) (*Runner, er
 	return r, nil
 }
 
-// Run feeds recorded items into the tapped collectors and follows them to the
-// backends.
-func (r *Runner) Run(ctx context.Context, items []unit.Metric) error {
-	defer r.shutdown(ctx)
-	for _, name := range Names(r.f.Collectors) {
-		c := r.f.Collectors[name]
-		if c.Tap == "" {
-			continue
+// Group is recorded items that one instance of a tapped collector received:
+// one recording.
+type Group struct {
+	Collector string
+	// Node is the instance's Kubernetes node (a daemonset agent's); "" when
+	// unknown.
+	Node  string
+	Items []unit.Metric
+}
+
+// Tapped returns the collectors that have a tap, in name order.
+func (f *File) Tapped() []string {
+	var out []string
+	for _, name := range Names(f.Collectors) {
+		if f.Collectors[name].Tap != "" {
+			out = append(out, name)
 		}
-		tap := r.configs[name].Service.Pipelines[c.Tap]
+	}
+	return out
+}
+
+// Run feeds each group of recorded items into its collector, as the instance
+// on its node, and follows them to the backends. Collectors after the first
+// (e.g. a gateway) run as one shared instance.
+func (r *Runner) Run(ctx context.Context, groups []Group) error {
+	defer r.shutdown(ctx)
+	for _, g := range groups {
+		c, ok := r.f.Collectors[g.Collector]
+		if !ok || c.Tap == "" {
+			return fmt.Errorf("a recording is for collector %q, which has no tap in the topology", g.Collector)
+		}
 		receivers := map[string]bool{}
-		for _, rc := range tap.Receivers {
+		for _, rc := range r.configs[g.Collector].Service.Pipelines[c.Tap].Receivers {
 			receivers[rc] = true
 		}
-		if err := r.flow(ctx, name, receivers, items, 0); err != nil {
+		if err := r.flow(ctx, g.Collector, receivers, g.Items, 0, g.Node); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *Runner) flow(ctx context.Context, coll string, receivers map[string]bool, items []unit.Metric, depth int) error {
+// flow runs items through the pipelines of one collector instance. node is
+// the instance's node, for a tapped collector's instance; "" otherwise.
+func (r *Runner) flow(ctx context.Context, coll string, receivers map[string]bool, items []unit.Metric, depth int, node string) error {
 	if depth > 16 {
 		return fmt.Errorf("joins form a loop through %s", coll)
 	}
@@ -125,7 +148,7 @@ func (r *Runner) flow(ctx context.Context, coll string, receivers map[string]boo
 				return err
 			}
 		}
-		nodes, err := r.pipelineNodes(ctx, coll, pid)
+		nodes, err := r.pipelineNodes(ctx, coll, pid, node)
 		if err != nil {
 			return err
 		}
@@ -175,14 +198,15 @@ func (r *Runner) export(ctx context.Context, coll, exp string, items []unit.Metr
 			r.Delivered[to.Backend] = append(r.Delivered[to.Backend], items...)
 			return nil
 		}
-		return r.flow(ctx, to.Collector, map[string]bool{to.ID: true}, items, depth+1)
+		return r.flow(ctx, to.Collector, map[string]bool{to.ID: true}, items, depth+1, "")
 	}
 	return fmt.Errorf("%s is neither joined nor external", key)
 }
 
-// pipelineNodes builds (once) the processor nodes of a pipeline.
-func (r *Runner) pipelineNodes(ctx context.Context, coll, pid string) ([]graph.MetricsNode, error) {
-	key := coll + "/" + pid
+// pipelineNodes builds (once per collector instance) the processor nodes of
+// a pipeline.
+func (r *Runner) pipelineNodes(ctx context.Context, coll, pid, node string) ([]graph.MetricsNode, error) {
+	key := coll + "/" + pid + "@" + node
 	if n, ok := r.nodes[key]; ok {
 		return n, nil
 	}
@@ -190,7 +214,7 @@ func (r *Runner) pipelineNodes(ctx context.Context, coll, pid string) ([]graph.M
 	var nodes []graph.MetricsNode
 	for _, id := range cfg.Service.Pipelines[pid].Processors {
 		name := processorName(cfg, r.f.Collectors[coll], coll, pid, id)
-		nodes = append(nodes, r.processorNode(ctx, coll, name, id, cfg.Processors[id]))
+		nodes = append(nodes, r.processorNode(ctx, coll, name, id, cfg.Processors[id], node))
 	}
 	r.nodes[key] = nodes
 	return nodes, nil
@@ -220,13 +244,13 @@ func processorName(cfg *collector.Config, c Collector, coll, pid, id string) str
 // exporterName is an exporter's node name in lineage.
 func exporterName(coll, exp string) string { return coll + "/" + exp }
 
-func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw map[string]any) graph.MetricsNode {
+func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw map[string]any, node string) graph.MetricsNode {
 	switch typ := collector.Type(id); {
 	case typ == "batch", typ == "memory_limiter":
 		// They only regroup or shed load; they don't change data.
 		return graph.PassThrough{NodeName: name}
 	case typ == "k8sattributes":
-		n, err := k8sattributes.New(name, raw, r.in.Cluster)
+		n, err := k8sattributes.New(name, raw, r.in.Cluster, k8sattributes.Instance{Node: node, Env: r.f.Collectors[coll].Env})
 		if err != nil {
 			return graph.Unsupported{NodeName: name, Reason: err.Error()}
 		}
@@ -236,7 +260,7 @@ func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw m
 		if v, ok := r.in.ResourceDetection[coll][id]; ok {
 			rec = &v
 		}
-		n, err := resourcedetection.New(name, raw, rec, r.in.SnapshotPods)
+		n, err := resourcedetection.New(name, raw, rec, r.in.SnapshotPods, node)
 		if err != nil {
 			return graph.Unsupported{NodeName: name, Reason: err.Error()}
 		}

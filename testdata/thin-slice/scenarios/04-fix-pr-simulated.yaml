@@ -6,7 +6,6 @@ description: "A PR adds the sidecar and names the container in OTEL_RESOURCE_ATT
 eval_time: 2026-10-23T10:00:30Z
 
 data:
-  recording: ../recordings/baseline.otlp.jsonl
   snapshot: ../recordings/baseline.meta.yaml
 
 config:

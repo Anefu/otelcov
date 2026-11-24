@@ -6,7 +6,6 @@ description: "The agent sends to the gateway's HTTP port (4318) instead of gRPC 
 eval_time: ${EVAL_TIME}
 
 data:
-  recording: ../recording.otlp.jsonl
   snapshot: ../snapshot.meta.yaml
 
 config:

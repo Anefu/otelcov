@@ -4,7 +4,6 @@ description: "A PR makes the gateway's team statement match namespace inference-
 eval_time: 2026-10-23T10:00:30Z
 
 data:
-  recording: ../recordings/staging.otlp.jsonl
   snapshot: ../recordings/staging.meta.yaml
 
 config:

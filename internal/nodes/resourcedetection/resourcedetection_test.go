@@ -45,7 +45,7 @@ var pods = []corev1.Pod{pod("app-1", "10.0.0.1", "node-a"), pod("app-2", "10.0.0
 
 func process(t *testing.T, raw map[string]any, r *Recorded, in ...unit.Metric) map[lineage.SignalID][]lineage.Event {
 	t.Helper()
-	n, err := New("agent/resourcedetection", raw, r, pods)
+	n, err := New("agent/resourcedetection", raw, r, pods, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,5 +124,21 @@ func TestStarForNonDaemonsets(t *testing.T) {
 		if e.Action == lineage.Unverified {
 			t.Errorf("only override changed, which the node models: %+v", e)
 		}
+	}
+}
+
+// A collector instance whose node is known detects its own host, even for
+// data from a pod on another node.
+func TestInstanceNodeWins(t *testing.T) {
+	n, err := New("agent/resourcedetection", map[string]any{"detectors": []any{"env", "system"}}, rec, pods, "node-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := item("s1", map[string]string{"k8s.pod.ip": "10.0.0.1"})
+	if _, err := n.ProcessMetrics(context.Background(), []unit.Metric{a}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := unit.Resource(a.Data).Attributes().Get("host.name"); v.Str() != "node-b" {
+		t.Errorf("the agent on node-b detects node-b: host.name = %q", v.Str())
 	}
 }

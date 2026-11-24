@@ -6,7 +6,6 @@ description: "A PR makes the gateway's team statement match namespace inference-
 eval_time: ${EVAL_TIME}
 
 data:
-  recording: ../recording.otlp.jsonl
   snapshot: ../snapshot.meta.yaml
 
 config:

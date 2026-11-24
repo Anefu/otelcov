@@ -41,6 +41,8 @@ func golden(t *testing.T, dir, path string) {
 		}
 		got := roundTrip(t, rep)
 		if *update {
+			// The version would only say "devel"; comparisons ignore it.
+			rep.Otelcov = nil
 			b, _ := json.MarshalIndent(rep, "", "  ")
 			if err := os.WriteFile(s.Expected, append(b, '\n'), 0o644); err != nil {
 				t.Fatal(err)

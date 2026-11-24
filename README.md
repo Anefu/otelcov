@@ -4,7 +4,7 @@ Coverage and lineage for OpenTelemetry monitoring stacks.
 
 otelcov replays recorded telemetry through your collectors, backends, rules, alerts and dashboards to show which workloads are actually watched, explain where coverage breaks, and check pull requests before they merge.
 
-> **Status: early, not production-ready.** Metrics work end to end: recorded OTLP through daemonset agents and a gateway (real collector-contrib processors), Mimir, recording rules, alerts and Alertmanager routing. On a local [kind cluster](dev/kind/) running that stack, otelcov's answers matched what Mimir and Alertmanager actually did: for the baseline, for a gateway pull request predicted before it was deployed, and for the sidecar bug below. It hasn't been pointed at a real staging stack yet, some common collector settings aren't modeled (k8sattributes `filter`, for one), and logs, traces and dashboards aren't covered. The design and its decisions live in [AGENTS.md](AGENTS.md).
+> **Status: early, not production-ready.** Metrics work end to end: recorded OTLP through daemonset agents and a gateway (real collector-contrib processors), Mimir, recording rules, alerts and Alertmanager routing. On a local [kind cluster](dev/kind/) running that stack, otelcov's answers matched what Mimir and Alertmanager actually did: for the baseline, for a gateway pull request predicted before it was deployed, and for the sidecar bug below. It hasn't been pointed at a real staging stack yet, some collector settings aren't modeled yet, and logs, traces and dashboards aren't covered. The design and its decisions live in [AGENTS.md](AGENTS.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/report-page-dark.png">
@@ -38,7 +38,7 @@ apps → collectors (agent, gateway) → backends (Mimir, Loki) → recording ru
 
 ## Usage
 
-otelcov runs *scenarios*: a recording, the config under test (pods, and a topology file naming the collector, Mimir, rules and Alertmanager configs and how they connect) and coverage requirements.
+otelcov runs *scenarios*: a snapshot (the recordings, one per tapped collector instance, and what was running when they were made), the config under test (pods, and a topology file naming the collector, Mimir, rules and Alertmanager configs and how they connect) and coverage requirements.
 
 ```console
 $ go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.yaml

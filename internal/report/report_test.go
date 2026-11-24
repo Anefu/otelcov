@@ -216,3 +216,25 @@ func TestRenamedMetricDiagnosis(t *testing.T) {
 		t.Errorf("hints = %q", d.Hints)
 	}
 }
+
+// When k8sattributes found no pod, the hint is about the association, not
+// the container.
+func TestAssociationHints(t *testing.T) {
+	chk := check{container: "app"}
+	for name, tc := range map[string]struct {
+		detail map[string]any
+		want   string
+	}{
+		"other node": {map[string]any{"association": "filtered", "filter": "node", "pod_node": "kind-worker", "watched_node": "kind-worker2"},
+			"to the collector on its own node, `kind-worker`"},
+		"other filter": {map[string]any{"association": "filtered", "filter": "labels"}, "Make the `filter` of `agent/k8sattributes` include this pod"},
+		"ignored":      {map[string]any{"association": "ignored"}, "Stop `agent/k8sattributes` ignoring this pod"},
+		"no match":     {map[string]any{"association": "no_match"}, "what the `pod_association` rules of `agent/k8sattributes` look pods up by"},
+		"container":    {nil, "Set `k8s.container.name=app` in `OTEL_RESOURCE_ATTRIBUTES`"},
+	} {
+		root := lineage.Event{Node: "agent/k8sattributes", Attribute: "k8s.container.name", Action: lineage.Skipped, Detail: tc.detail}
+		if got := hints(chk, "k8s.container.name", root, `k8s_container_name="app"`, "rule `r`"); len(got) == 0 || !strings.Contains(got[0], tc.want) {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+}

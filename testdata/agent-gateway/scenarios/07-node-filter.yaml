@@ -1,0 +1,16 @@
+# Agents that only watch the pods on their own node, replayed from one
+# recording per agent: each app's data reached its own node's agent, which
+# sees its pod.
+name: 07-node-filter
+description: "Each agent only watches pods on its own node (k8sattributes filter), and each app sends to its node's agent."
+eval_time: 2026-10-23T10:00:30Z
+
+data:
+  snapshot: ../recordings/staging-nodes.meta.yaml
+
+config:
+  pods: ../k8s/pods.yaml
+  topology: ../topology-node-filter.yaml
+
+requirements: ../requirements/vllm.yaml
+expected: ../expected/07-node-filter.report.json

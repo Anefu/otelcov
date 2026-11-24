@@ -1,4 +1,7 @@
 recorded_at: 2026-10-23T10:00:00Z
+# One file for both agents, without the node each line arrived on.
+recordings:
+  - file: staging.otlp.jsonl
 pods: ../k8s/pods.yaml
 # What each resourcedetection processor found, by collector then processor
 # ID: its config at recording time, and the detected attributes per

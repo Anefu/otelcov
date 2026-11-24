@@ -9,7 +9,7 @@ vllm-embed (+ sidecar) ──┴─▶ agent ──▶ gateway ──┤   (OTLP
                             tap ▶ recordings
 ```
 
-- **Agent** (daemonset, one per worker): k8sattributes, resourcedetection, resource, batch. Two extra pipelines exist only for otelcov: `metrics/tap` records raw input, and `metrics/detected` records what resourcedetection adds.
+- **Agent** (daemonset, one per worker): k8sattributes (watching only its own node's pods: `filter.node_from_env_var: K8S_NODE_NAME`), resourcedetection, resource, batch. Two extra pipelines exist only for otelcov: `metrics/tap` records raw input, and `metrics/detected` records what resourcedetection adds.
 - **Gateway**: memory_limiter, filter (drops `debug.heartbeat`), transform (sets `team`), deltatocumulative, batch.
 - **Apps**: a Python stand-in for vLLM sends `process.memory.usage`, `debug.heartbeat` and a delta `vllm.requests` every 15s.
 - The rule, alert and routes match `testdata/agent-gateway`. The alert threshold is `> 0` and `for: 1m`, so it really fires; thresholds don't change otelcov's answer (decision 46).
@@ -42,7 +42,7 @@ When everything is green, give it about 2 minutes: apps export every 15s, the ru
 
 Then, in the Tilt UI (or `tilt trigger <name>`), run the three manual resources under **otelcov**, in order:
 
-1. **capture** copies each agent's recordings off the cluster, plus the pods, namespaces and nodes (`pods.yaml`, one List) and the deployed agent config, into `dev/kind/captured/`. It builds `recording.otlp.jsonl` and `snapshot.meta.yaml`, with resourcedetection values per node, and writes the scenarios from `otelcov/scenarios/` with `eval_time` set to the last recorded timestamp. Each capture replaces the previous one.
+1. **capture** copies each agent's recordings off the cluster, plus the pods, namespaces and nodes (`pods.yaml`, one List) and the deployed agent config, into `dev/kind/captured/`. It builds one recording per agent (`recordings/<node>.otlp.jsonl`) and `snapshot.meta.yaml`, which lists them with their node (decision 64) and has the resourcedetection values per node, and writes the scenarios from `otelcov/scenarios/` with `eval_time` set to the last recorded timestamp. Each capture replaces the previous one.
 2. **otelcov** runs all four scenarios on the capture:
    - `01-baseline` (what's deployed): both pods covered.
    - `02-team-pr` (the gateway PR in `whatif/`): both not covered, with the transform statement as the root cause.
@@ -92,7 +92,7 @@ Editing `config/*.yaml` redeploys too. otelcov's topology (`otelcov/topology.yam
 | `app/` | The Python stand-in for vLLM and the webhook sink (one image) |
 | `otelcov/` | otelcov's view: topology files (with `snapshot_pipelines: [metrics/detected]`), the requirement, scenario templates |
 | `capture.sh` | Step 1 above |
-| `snapshot/` | Turns raw captures into `recording.otlp.jsonl`, `snapshot.meta.yaml`, a `pods-<name>.yaml` per apps what-if, and scenarios. Its test runs the whole lab offline: a fake capture through otelcov with the real configs |
+| `snapshot/` | Turns raw captures into `recordings/<node>.otlp.jsonl`, `snapshot.meta.yaml`, a `pods-<name>.yaml` per apps what-if, and scenarios. Its test runs the whole lab offline: a fake capture through otelcov with the real configs |
 | `compare/` | Step 3 above |
 | `captured/`, `bin/` | Generated; ignored by git |
 
@@ -113,6 +113,7 @@ Editing `config/*.yaml` redeploys too. otelcov's topology (`otelcov/topology.yam
 - compare agreed for the baseline, and, after it was deployed, for the gateway PR.
 - The motivating bug: with the apps what-if (`whatif/apps-embed-no-env.yaml`) deployed, otelcov found vllm-embed not covered, broken at the recording rule with the agent's k8sattributes as the root cause, and vllm-chat still covered. compare agreed for both pods.
 - These runs used collector 0.135.0. The lab has run 0.134.1 since (decision 37).
+- Not yet on a real cluster: the agents' node filter (added 2026-11-24). The offline test (`snapshot/`) passes with it.
 
 ## Troubleshooting
 

@@ -43,6 +43,35 @@ type Result struct {
 	pods []corev1.Pod
 }
 
+// groupByRecording splits the replayed items by the recording they came
+// from: each recording is what one collector instance's tap wrote, so its
+// items enter that collector as the instance on the recording's node. A
+// recording without a collector is for the only tapped collector.
+func groupByRecording(s *Scenario, snap *Snapshot, topo *topology.File, src *source.Replay, items []unit.Metric) ([]topology.Group, error) {
+	tapped := topo.Tapped()
+	groups := make([]topology.Group, len(snap.Recordings))
+	for i, rec := range snap.Recordings {
+		coll := rec.Collector
+		switch {
+		case coll == "" && len(tapped) == 1:
+			coll = tapped[0]
+		case coll == "":
+			return nil, fmt.Errorf("snapshot: recording %s doesn't say which collector recorded it, and collectors %s all have taps", s.Rel(rec.File), strings.Join(tapped, ", "))
+		case topo.Collectors[coll].Tap == "":
+			return nil, fmt.Errorf("snapshot: recording %s is for collector %q, which has no tap in the topology", s.Rel(rec.File), coll)
+		}
+		groups[i] = topology.Group{Collector: coll, Node: rec.Node}
+	}
+	for _, it := range items {
+		i, ok := src.FileOf[it.ID]
+		if !ok {
+			return nil, fmt.Errorf("item %s doesn't come from a recording", it.ID)
+		}
+		groups[i].Items = append(groups[i].Items, it)
+	}
+	return groups, nil
+}
+
 // Run executes the scenario: replay, sdk-env, the collectors as the topology
 // connects them, each backend, recording and alerting rules, then
 // Alertmanager routing.
@@ -90,11 +119,20 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	}
 
 	log := lineage.NewLog()
-	items, err := graph.ReadSource(ctx, source.New(s.Data.Recording, s.Rel(s.Data.Recording)), log)
+	files := make([]source.File, len(snap.Recordings))
+	for i, rec := range snap.Recordings {
+		files[i] = source.File{Path: rec.File, Display: s.Rel(rec.File)}
+	}
+	src := source.New(files...)
+	items, err := graph.ReadSource(ctx, src, log)
 	if err != nil {
 		return nil, err
 	}
 	if items, err = graph.Process(ctx, []graph.MetricsNode{sdkenv.New(snapPods, pods)}, items, log); err != nil {
+		return nil, err
+	}
+	groups, err := groupByRecording(s, snap, topo, src, items)
+	if err != nil {
 		return nil, err
 	}
 
@@ -102,7 +140,7 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := runner.Run(ctx, items); err != nil {
+	if err := runner.Run(ctx, groups); err != nil {
 		return nil, err
 	}
 

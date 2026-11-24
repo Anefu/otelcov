@@ -9,8 +9,9 @@
 //
 // and writes, in -dir:
 //
-//	recording.otlp.jsonl   every agent's tap, node by node
-//	snapshot.meta.yaml     recorded_at, pods, and what resourcedetection detected per node
+//	recordings/<node>.otlp.jsonl  each agent's tap, without a cut-off last line
+//	snapshot.meta.yaml     the recordings with their collector and node, recorded_at,
+//	                       pods, and what resourcedetection detected per node
 //	scenarios/*.yaml       the -templates scenarios, with eval_time set to the last recorded timestamp
 //	pods-<name>.yaml       for each -apps-whatifs manifest apps-<name>.yaml, the pods as its
 //	                       Deployment templates would make them (see whatif.go)
@@ -78,10 +79,13 @@ func run(o options, now time.Time) error {
 		return err
 	}
 	var (
-		recording bytes.Buffer
-		last      time.Time
-		values    = resourcedetection.Values{}
+		last       time.Time
+		values     = resourcedetection.Values{}
+		recordings []scenario.Recording
 	)
+	if err := os.MkdirAll(filepath.Join(o.dir, "recordings"), 0o755); err != nil {
+		return err
+	}
 	for _, node := range nodes {
 		raw, err := readRequests(filepath.Join(o.dir, "tap", node+".jsonl"))
 		if err != nil {
@@ -91,6 +95,7 @@ func run(o options, now time.Time) error {
 		if err != nil {
 			return err
 		}
+		var recording bytes.Buffer
 		for _, r := range raw {
 			recording.Write(r.line)
 			recording.WriteByte('\n')
@@ -98,6 +103,11 @@ func run(o options, now time.Time) error {
 				last = t
 			}
 		}
+		file := "recordings/" + node + ".otlp.jsonl"
+		if err := os.WriteFile(filepath.Join(o.dir, file), recording.Bytes(), 0o644); err != nil {
+			return err
+		}
+		recordings = append(recordings, scenario.Recording{File: file, Collector: o.collector, Node: node})
 		v, err := detectedValues(raw, detected)
 		if err != nil {
 			return fmt.Errorf("node %s: %w", node, err)
@@ -110,12 +120,10 @@ func run(o options, now time.Time) error {
 	if last.IsZero() {
 		return errors.New("the recording has no data points; wait for the apps to export, then capture again")
 	}
-	if err := os.WriteFile(filepath.Join(o.dir, "recording.otlp.jsonl"), recording.Bytes(), 0o644); err != nil {
-		return err
-	}
 
 	snap := scenario.Snapshot{
 		RecordedAt: now.Format(time.RFC3339),
+		Recordings: recordings,
 		Pods:       "pods.yaml",
 		ResourceDetection: map[string]map[string]resourcedetection.Recorded{
 			o.collector: {o.processor: {Config: detectCfg, Values: values}},

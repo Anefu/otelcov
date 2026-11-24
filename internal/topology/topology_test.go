@@ -200,7 +200,7 @@ func run(t *testing.T, f *File) (*Runner, *lineage.Log) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(context.Background(), in); err != nil {
+	if err := r.Run(context.Background(), []Group{{Collector: f.Tapped()[0], Items: in}}); err != nil {
 		t.Fatal(err)
 	}
 	return r, log

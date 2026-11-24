@@ -4,8 +4,7 @@ description: "As recorded: both vLLM pods have one container."
 eval_time: 2026-10-23T10:00:30Z   # single instant; `for:` is treated as met
 
 data:                              # the live side of f(data, config)
-  recording: ../recordings/baseline.otlp.jsonl
-  snapshot: ../recordings/baseline.meta.yaml   # pod specs at recording time
+  snapshot: ../recordings/baseline.meta.yaml   # the recording, and pod specs at recording time
 
 config:                            # the static side
   pods: ../k8s/pods-single.yaml
