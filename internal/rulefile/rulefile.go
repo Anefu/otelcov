@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/rulefmt"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -42,7 +43,9 @@ type Rules struct {
 func Load(paths []string) (*Rules, error) {
 	out := &Rules{}
 	for _, path := range paths {
-		groups, errs := rulefmt.ParseFile(path, false)
+		// UTF-8 names, Prometheus 3's default (the scheme rulefmt used before
+		// it took one as an argument).
+		groups, errs := rulefmt.ParseFile(path, false, model.UTF8Validation)
 		if len(errs) > 0 {
 			return nil, fmt.Errorf("%s: %w", path, errors.Join(errs...))
 		}

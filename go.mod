@@ -4,39 +4,39 @@ go 1.24.0
 
 toolchain go1.24.13
 
-// Pinned to the collector version the checked collectors run (0.134.x).
-// pdata v1.40.0 ships with collector core and contrib v0.134.0.
+// Pinned to collector-contrib 0.139 (decision 66): otelcov's answers hold for
+// collectors 0.134 to 0.139. pdata v1.45.0 ships with core and contrib v0.139.0.
 require (
 	// k8sattributes parses container images with it, as upstream does.
 	github.com/distribution/reference v0.6.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.134.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.134.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.134.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.134.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.134.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.134.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.134.0
-	// Same Prometheus and Alertmanager versions as collector-contrib 0.134.
+	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.139.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.139.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.139.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.139.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.139.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.139.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.139.0
+	// Same Prometheus and Alertmanager versions as collector-contrib 0.139.
 	github.com/prometheus/alertmanager v0.28.1
-	github.com/prometheus/common v0.65.0
-	github.com/prometheus/otlptranslator v0.0.0-20250620074007-94f535e0c588
-	github.com/prometheus/prometheus v0.304.3-0.20250703114031-419d436a447a
-	go.opentelemetry.io/collector/component v1.40.0
-	go.opentelemetry.io/collector/component/componenttest v0.134.0
-	go.opentelemetry.io/collector/confmap v1.40.0
-	go.opentelemetry.io/collector/confmap/xconfmap v0.134.0
-	go.opentelemetry.io/collector/consumer v1.40.0
-	go.opentelemetry.io/collector/consumer/consumertest v0.134.0
-	go.opentelemetry.io/collector/featuregate v1.40.0
-	go.opentelemetry.io/collector/pdata v1.40.0
-	go.opentelemetry.io/collector/pipeline v1.40.0
-	go.opentelemetry.io/collector/processor v1.40.0
-	go.opentelemetry.io/collector/processor/processortest v0.134.0
-	// Same Kubernetes versions as collector-contrib 0.134's k8sattributes processor.
-	k8s.io/api v0.32.3
-	k8s.io/apimachinery v0.32.3
-	sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3
-	sigs.k8s.io/yaml v1.5.0
+	github.com/prometheus/common v0.67.2
+	github.com/prometheus/otlptranslator v1.0.0
+	github.com/prometheus/prometheus v0.307.1
+	go.opentelemetry.io/collector/component v1.45.0
+	go.opentelemetry.io/collector/component/componenttest v0.139.0
+	go.opentelemetry.io/collector/confmap v1.45.0
+	go.opentelemetry.io/collector/confmap/xconfmap v0.139.0
+	go.opentelemetry.io/collector/consumer v1.45.0
+	go.opentelemetry.io/collector/consumer/consumertest v0.139.0
+	go.opentelemetry.io/collector/featuregate v1.45.0
+	go.opentelemetry.io/collector/pdata v1.45.0
+	go.opentelemetry.io/collector/pipeline v1.45.0
+	go.opentelemetry.io/collector/processor v1.45.0
+	go.opentelemetry.io/collector/processor/processortest v0.139.0
+	// Same Kubernetes versions as collector-contrib 0.139's k8sattributes processor.
+	k8s.io/api v0.34.1
+	k8s.io/apimachinery v0.34.1
+	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -126,11 +126,11 @@ require (
 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f // indirect
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
-	github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal v0.134.0 // indirect
-	github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics v0.134.0 // indirect
-	github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter v0.134.0 // indirect
-	github.com/open-telemetry/opentelemetry-collector-contrib/internal/pdatautil v0.134.0 // indirect
-	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.134.0 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal v0.139.0 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics v0.139.0 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter v0.139.0 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/internal/pdatautil v0.139.0 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.139.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -148,15 +148,15 @@ require (
 	github.com/ua-parser/uap-go v0.0.0-20240611065828-3a4781585db6 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/collector/client v1.40.0 // indirect
-	go.opentelemetry.io/collector/component/componentstatus v0.134.0 // indirect
-	go.opentelemetry.io/collector/consumer/xconsumer v0.134.0 // indirect
-	go.opentelemetry.io/collector/internal/telemetry v0.134.0 // indirect
-	go.opentelemetry.io/collector/pdata/pprofile v0.134.0 // indirect
-	go.opentelemetry.io/collector/pdata/testdata v0.134.0 // indirect
-	go.opentelemetry.io/collector/processor/processorhelper v0.134.0 // indirect
-	go.opentelemetry.io/collector/processor/processorhelper/xprocessorhelper v0.134.0 // indirect
-	go.opentelemetry.io/collector/processor/xprocessor v0.134.0 // indirect
+	go.opentelemetry.io/collector/client v1.45.0 // indirect
+	go.opentelemetry.io/collector/component/componentstatus v0.139.0 // indirect
+	go.opentelemetry.io/collector/consumer/xconsumer v0.139.0 // indirect
+	go.opentelemetry.io/collector/internal/telemetry v0.139.0 // indirect
+	go.opentelemetry.io/collector/pdata/pprofile v0.139.0 // indirect
+	go.opentelemetry.io/collector/pdata/testdata v0.139.0 // indirect
+	go.opentelemetry.io/collector/processor/processorhelper v0.139.0 // indirect
+	go.opentelemetry.io/collector/processor/processorhelper/xprocessorhelper v0.139.0 // indirect
+	go.opentelemetry.io/collector/processor/xprocessor v0.139.0 // indirect
 	go.opentelemetry.io/collector/semconv v0.128.0 // indirect
 	go.opentelemetry.io/contrib/bridges/otelzap v0.12.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
