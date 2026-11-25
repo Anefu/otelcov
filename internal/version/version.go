@@ -2,8 +2,8 @@
 // models (decision 63).
 //
 // otelcov's versions track the collector-contrib release it's built against:
-// v0.134.x while pinned to collector-contrib v0.134.0, a new minor when the
-// pin moves. Both come from the binary's build information, so they can't
+// v0.139.x while pinned to collector-contrib v0.139.0 (decision 66), a new
+// minor when the pin moves. Both come from the binary's build information, so they can't
 // drift from go.mod: the otelcov version is the module version Go stamps from
 // the git tag ("devel" for a local build without one), and the collector
 // versions are those of the modules linked in.

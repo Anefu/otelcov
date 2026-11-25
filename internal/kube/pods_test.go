@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Pods from a newer cluster: fields the 1.32 types don't know are ignored and
+// Pods from a newer cluster: fields the 1.34 types don't know are ignored and
 // listed once, with list indexes collapsed.
 func TestLoadPodsFromNewerCluster(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pods.yaml")
@@ -22,14 +22,14 @@ items:
     spec:
       nodeName: n1
       containers: [{name: app, image: app}]
-    status: {podIP: 10.0.0.1, observedGeneration: 1}
+    status: {podIP: 10.0.0.1, fromTheFuture: 1}
   - apiVersion: v1
     kind: Pod
     metadata: {name: b, namespace: ns}
     spec:
       futureField: true
       containers: [{name: app, image: app}]
-    status: {podIP: 10.0.0.2, observedGeneration: 1}
+    status: {podIP: 10.0.0.2, fromTheFuture: 1}
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ items:
 	if len(pods) != 2 || pods[0].Spec.NodeName != "n1" || pods[1].Status.PodIP != "10.0.0.2" {
 		t.Errorf("pods not decoded: %+v", pods)
 	}
-	want := []string{"items[*].spec.futureField", "items[*].status.observedGeneration"}
+	want := []string{"items[*].spec.futureField", "items[*].status.fromTheFuture"}
 	if !reflect.DeepEqual(unknown, want) {
 		t.Errorf("unknown = %q, want %q", unknown, want)
 	}

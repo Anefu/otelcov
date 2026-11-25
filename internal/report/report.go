@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/prometheus/otlptranslator"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 	corev1 "k8s.io/api/core/v1"
@@ -517,12 +516,11 @@ func (ix *index) diagnose(c check, entry Entry, drop lineage.Event) *Diagnosis {
 		capitalize(where), q(matcher), q(label), q(c.alert))
 
 	// Which resource attribute should have become the label?
-	namer := otlptranslator.LabelNamer{}
 	var attr string
 	var backend lineage.Event
 	for i := len(entry.Path) - 1; i >= 0 && attr == ""; i-- {
 		for _, e := range ix.events[entry.Path[i]] {
-			if strings.HasPrefix(e.Node, mimir.Prefix) && e.Action == lineage.Skipped && namer.Build(e.Attribute) == label {
+			if strings.HasPrefix(e.Node, mimir.Prefix) && e.Action == lineage.Skipped && mimir.LabelName(e.Attribute) == label {
 				attr, backend = e.Attribute, e
 				break
 			}

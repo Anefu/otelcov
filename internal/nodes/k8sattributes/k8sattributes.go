@@ -4,7 +4,9 @@
 // and the decision that matters most (not naming the container in a
 // multi-container pod) is a non-event that comparing input and output can't
 // explain. The model follows collector-contrib 0.134's processor.go and
-// internal/kube/client.go:
+// internal/kube/client.go, checked against 0.139 (whose changes are settings
+// it added: deployment_name_from_replicaset, k8s.cronjob.uid, labels from
+// DaemonSets and Jobs):
 //
 //   - pods are associated by the pod_association rules, in order;
 //   - attributes come in the processor's order: the pod's (metadata, then
@@ -81,6 +83,9 @@ type Extract struct {
 	// OtelAnnotations adds the pod's resource.opentelemetry.io/<name>
 	// annotations as attribute <name>.
 	OtelAnnotations bool `json:"otel_annotations"`
+	// DeploymentNameFromReplicaSet takes the Deployment's name from the
+	// ReplicaSet's name instead of the ReplicaSet object (contrib 0.139).
+	DeploymentNameFromReplicaSet bool `json:"deployment_name_from_replicaset"`
 }
 
 // FieldExtract copies a label or annotation of the pod, its namespace or its
@@ -104,7 +109,8 @@ type Source struct {
 }
 
 // defaultMetadata is extracted when extract.metadata is not set: the
-// attributes enabled by default in contrib 0.134's metadata.yaml.
+// attributes enabled by default in contrib's metadata.yaml (the same in 0.134
+// and 0.139).
 var defaultMetadata = []string{
 	"k8s.namespace.name", "k8s.pod.name", "k8s.pod.uid", "k8s.pod.start_time",
 	"k8s.deployment.name", "k8s.node.name", "container.image.name", "container.image.tag",
@@ -117,7 +123,7 @@ var supportedMetadata = map[string]bool{
 	"k8s.pod.start_time": true, "k8s.pod.ip": true, "k8s.deployment.name": true, "k8s.deployment.uid": true,
 	"k8s.replicaset.name": true, "k8s.replicaset.uid": true, "k8s.daemonset.name": true, "k8s.daemonset.uid": true,
 	"k8s.statefulset.name": true, "k8s.statefulset.uid": true, "k8s.job.name": true, "k8s.job.uid": true,
-	"k8s.cronjob.name": true, "k8s.node.name": true, "k8s.node.uid": true, "k8s.container.name": true,
+	"k8s.cronjob.name": true, "k8s.cronjob.uid": true, "k8s.node.name": true, "k8s.node.uid": true, "k8s.container.name": true,
 	"container.id": true, "container.image.name": true, "container.image.tag": true,
 	"service.namespace": true, "service.name": true, "service.version": true, "service.instance.id": true,
 	"container.image.repo_digests": true, "k8s.cluster.uid": true,
@@ -531,7 +537,7 @@ func (n *Node) specNames() bool {
 	return false
 }
 
-// containers is the processor's per-pod container lookup (contrib 0.134,
+// containers is the processor's per-pod container lookup (contrib 0.134 to 0.139,
 // internal/kube/client.go, extractPodContainersAttributes): every container
 // and init container in the pod status, by name and by container ID with its
 // runtime prefix removed, plus the pod spec's names when specNames is set.
@@ -766,8 +772,13 @@ func (n *Node) podValue(key string, pod *corev1.Pod) (proposal, bool) {
 			return write(m[1], "from Job "+o.name), true
 		}
 		return skip("Job " + o.name + " isn't named like a CronJob's job (`<cronjob>-<number>`)"), true
+	case "k8s.cronjob.uid":
+		if o, why := owner("Job"); o == nil {
+			return skip(why), true
+		}
+		return unknown("the CronJob's UID comes from the pod's Job object, which otelcov doesn't load"), true
 	case "k8s.deployment.name":
-		name, why := deployment(pod)
+		name, why := n.deployment(pod)
 		if name == "" {
 			return skip(why), true
 		}
@@ -787,7 +798,7 @@ func (n *Node) podValue(key string, pod *corev1.Pod) (proposal, bool) {
 		}
 		return write(string(ks.UID), "the `kube-system` namespace's UID"), true
 	case "service.name":
-		return serviceName(pod), true
+		return n.serviceName(pod), true
 	}
 	return proposal{}, false
 }
@@ -798,10 +809,18 @@ type ownerRef struct{ name, uid string }
 // <cronjob>-<number>.
 var cronJobJob = regexp.MustCompile(`^(.*)-\d+$`)
 
-// deployment derives the Deployment from the pod's ReplicaSet owner and its
-// pod-template-hash label. The processor reads it from the ReplicaSet object;
-// a ReplicaSet made by a Deployment is named <deployment>-<pod-template-hash>.
-func deployment(pod *corev1.Pod) (string, string) {
+// rsHash is the processor's deploymentHashSuffixPattern: with
+// deployment_name_from_replicaset, the last dash-separated part of the
+// ReplicaSet's name is the pod-template-hash if it matches.
+var rsHash = regexp.MustCompile(`^[a-z0-9]{10}$`)
+
+// deployment derives the Deployment from the pod's ReplicaSet owner. By
+// default the processor reads it from the ReplicaSet object, and otelcov uses
+// the pod's pod-template-hash label instead: a ReplicaSet made by a Deployment
+// is named <deployment>-<pod-template-hash>. With
+// deployment_name_from_replicaset, the processor trims the name's last part
+// when it looks like a hash (extractDeploymentNameFromReplicaSet).
+func (n *Node) deployment(pod *corev1.Pod) (string, string) {
 	var rs string
 	for _, o := range pod.OwnerReferences {
 		if o.Kind == "ReplicaSet" {
@@ -810,6 +829,13 @@ func deployment(pod *corev1.Pod) (string, string) {
 	}
 	if rs == "" {
 		return "", "pod has no ReplicaSet owner"
+	}
+	if n.cfg.Extract.DeploymentNameFromReplicaSet {
+		parts := strings.Split(rs, "-")
+		if len(parts) < 2 || !rsHash.MatchString(parts[len(parts)-1]) {
+			return "", "ReplicaSet " + rs + "'s name doesn't end in a 10-character hash (`deployment_name_from_replicaset`)"
+		}
+		return strings.Join(parts[:len(parts)-1], "-"), ""
 	}
 	hash := pod.Labels["pod-template-hash"]
 	if hash == "" || !strings.HasSuffix(rs, "-"+hash) {
@@ -821,13 +847,13 @@ func deployment(pod *corev1.Pod) (string, string) {
 // serviceName is the processor's service.name before the label rules: the
 // pod's name, replaced by its owners' (the Deployment over the ReplicaSet,
 // the CronJob over the Job). The app.kubernetes.io labels come after.
-func serviceName(pod *corev1.Pod) proposal {
+func (n *Node) serviceName(pod *corev1.Pod) proposal {
 	p := write(pod.Name, "the pod's name")
 	for _, o := range pod.OwnerReferences {
 		switch o.Kind {
 		case "ReplicaSet":
 			p = write(o.Name, "from ReplicaSet "+o.Name)
-			if d, why := deployment(pod); d != "" {
+			if d, why := n.deployment(pod); d != "" {
 				p = write(d, "from Deployment "+d)
 			} else if strings.HasPrefix(why, "can't derive") {
 				// The processor takes the Deployment from the ReplicaSet
@@ -1255,8 +1281,8 @@ type rule struct {
 }
 
 // compileRules is the processor's extractFieldRules, with its Validate
-// checks. Rules on Deployments and StatefulSets need those objects, which
-// otelcov doesn't load.
+// checks. Rules on Deployments, StatefulSets, DaemonSets and Jobs need those
+// objects, which otelcov doesn't load.
 func compileRules(e Extract) ([]rule, error) {
 	var out []rule
 	add := func(field string, list []FieldExtract) error {
@@ -1269,7 +1295,7 @@ func compileRules(e Extract) ([]rule, error) {
 			case "":
 				from = fromPod
 			case fromPod, fromNamespace, fromNode:
-			case "deployment", "statefulset":
+			case "deployment", "statefulset", "daemonset", "job":
 				return fmt.Errorf("unsupported k8sattributes config: %s from %s objects aren't modeled yet", field, from)
 			default:
 				return fmt.Errorf("k8sattributes config: %q is not a valid choice for from", f.From)

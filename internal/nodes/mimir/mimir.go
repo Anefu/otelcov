@@ -17,8 +17,9 @@ import (
 
 	"github.com/prometheus/otlptranslator"
 	promconfig "github.com/prometheus/prometheus/config"
+	"github.com/prometheus/prometheus/model/exemplar"
+	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/prompb"
 	prw "github.com/prometheus/prometheus/storage/remote/otlptranslator/prometheusremotewrite"
 	"sigs.k8s.io/yaml"
 
@@ -43,6 +44,12 @@ type Limits struct {
 	OTelMetricSuffixesEnabled bool `json:"otel_metric_suffixes_enabled"`
 	// OTelKeepIdentifyingResourceAttributes keeps service.* attributes on target_info.
 	OTelKeepIdentifyingResourceAttributes bool `json:"otel_keep_identifying_resource_attributes"`
+	// OTelLabelNameUnderscoreSanitization prefixes "key" to label names
+	// that start with a single underscore. Mimir's default is true.
+	OTelLabelNameUnderscoreSanitization *bool `json:"otel_label_name_underscore_sanitization"`
+	// OTelLabelNamePreserveMultipleUnderscores keeps consecutive
+	// underscores in label names. Mimir's default is true.
+	OTelLabelNamePreserveMultipleUnderscores *bool `json:"otel_label_name_preserve_multiple_underscores"`
 
 	// RuntimeConfig is the config's runtime_config.file, if set: per-tenant
 	// overrides there can change these limits, and otelcov doesn't read them
@@ -105,10 +112,60 @@ func New(backend string, l Limits) *Node {
 			KeepIdentifyingResourceAttributes: l.OTelKeepIdentifyingResourceAttributes,
 			// Mimir validates names with the legacy scheme by default and
 			// rejects delta temporality unless native delta ingestion is on.
-			AllowUTF8:             false,
-			AllowDeltaTemporality: false,
+			AllowUTF8:                            false,
+			AllowDeltaTemporality:                false,
+			LabelNameUnderscoreSanitization:      orTrue(l.OTelLabelNameUnderscoreSanitization),
+			LabelNamePreserveMultipleUnderscores: orTrue(l.OTelLabelNamePreserveMultipleUnderscores),
 		},
 	}
+}
+
+func orTrue(b *bool) bool { return b == nil || *b }
+
+// LabelName is the label Mimir makes of a resource attribute with its
+// default limits, or "" if it can't make one.
+func LabelName(attr string) string {
+	name, err := (&otlptranslator.LabelNamer{UnderscoreLabelSanitization: true, PreserveMultipleUnderscores: true}).Build(attr)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// appender collects what the translator writes, one entry per series in the
+// order first written.
+type appender struct {
+	series []*appended
+	byKey  map[string]*appended
+}
+
+type appended struct {
+	lset    labels.Labels
+	samples []unit.Sample
+}
+
+func (a *appender) get(ls labels.Labels) *appended {
+	key := ls.String()
+	s, ok := a.byKey[key]
+	if !ok {
+		s = &appended{lset: ls.Copy()}
+		a.byKey[key] = s
+		a.series = append(a.series, s)
+	}
+	return s
+}
+
+func (a *appender) AppendSample(ls labels.Labels, _ prw.Metadata, _, t int64, v float64, _ []exemplar.Exemplar) error {
+	s := a.get(ls)
+	s.samples = append(s.samples, unit.Sample{T: time.UnixMilli(t), V: v})
+	return nil
+}
+
+// AppendHistogram keeps the series without samples: native histograms aren't
+// modeled.
+func (a *appender) AppendHistogram(ls labels.Labels, _ prw.Metadata, _, _ int64, _ *histogram.Histogram, _ []exemplar.Exemplar) error {
+	a.get(ls)
+	return nil
 }
 
 func (n *Node) Name() string { return n.name }
@@ -148,9 +205,9 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 				Reason: "Mimir's runtime config (" + n.limits.RuntimeConfig + ") can override these limits per tenant, and otelcov doesn't read it yet",
 			})
 		}
-		c := prw.NewPrometheusConverter()
-		_, err := c.FromMetrics(ctx, it.Data, n.settings)
-		series := c.TimeSeries()
+		app := &appender{byKey: map[string]*appended{}}
+		_, err := prw.NewPrometheusConverter(app).FromMetrics(ctx, it.Data, n.settings)
+		series := app.series
 		if err != nil {
 			// The metric is rejected. target_info for its resource may still
 			// be written, so the remaining series are kept.
@@ -159,9 +216,9 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 				Reason: "Mimir's OTLP translation rejects it: " + err.Error(),
 			})
 		}
-		sort.Slice(series, func(i, j int) bool { return seriesKey(series[i]) < seriesKey(series[j]) })
+		sort.Slice(series, func(i, j int) bool { return series[i].lset.String() < series[j].lset.String() })
 		for _, ts := range series {
-			key := seriesKey(ts)
+			key := ts.lset.String()
 			cv, dup := byKey[key]
 			if dup {
 				// The same series from several inputs: later samples of one
@@ -171,11 +228,11 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 					cv.from = append(cv.from, it.ID)
 				}
 			} else {
-				cv = &converted{lset: toLabels(ts.Labels), from: []lineage.SignalID{it.ID}, input: it}
+				cv = &converted{lset: ts.lset, from: []lineage.SignalID{it.ID}, input: it}
 				byKey[key] = cv
 			}
-			for _, smp := range ts.Samples {
-				cv.add(unit.Sample{T: time.UnixMilli(smp.Timestamp), V: smp.Value})
+			for _, smp := range ts.samples {
+				cv.add(smp)
 			}
 			if dup {
 				continue
@@ -215,14 +272,15 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 // which promoted attributes were missing.
 func (n *Node) dataEvents(id lineage.SignalID, cv *converted) []lineage.Event {
 	res := unit.Resource(cv.input.Data).Attributes()
-	namer := otlptranslator.LabelNamer{UTF8Allowed: n.settings.AllowUTF8}
+	namer := otlptranslator.LabelNamer{UTF8Allowed: n.settings.AllowUTF8,
+		UnderscoreLabelSanitization: n.settings.LabelNameUnderscoreSanitization, PreserveMultipleUnderscores: n.settings.LabelNamePreserveMultipleUnderscores}
 
 	promoted := map[string]any{}
 	promoteSet := map[string]bool{}
 	for _, a := range n.promote {
 		promoteSet[a] = true
 		if _, ok := res.Get(a); ok {
-			promoted[a] = namer.Build(a)
+			promoted[a], _ = namer.Build(a)
 		}
 	}
 	targetOnly := []any{}
@@ -258,17 +316,6 @@ func (n *Node) dataEvents(id lineage.SignalID, cv *converted) []lineage.Event {
 	}
 	return events
 }
-
-func toLabels(ls []prompb.Label) labels.Labels {
-	b := labels.NewScratchBuilder(len(ls))
-	for _, l := range ls {
-		b.Add(l.Name, l.Value)
-	}
-	b.Sort()
-	return b.Labels()
-}
-
-func seriesKey(ts prompb.TimeSeries) string { return toLabels(ts.Labels).String() }
 
 func containsID(ids []lineage.SignalID, id lineage.SignalID) bool {
 	for _, x := range ids {

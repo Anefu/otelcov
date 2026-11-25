@@ -56,14 +56,14 @@ func TestScenarioCommand(t *testing.T) {
 }
 
 // The collector versions come from the linked modules, so they can't drift
-// from the collector-contrib pin (decisions 37 and 63).
+// from the collector-contrib pin (decisions 63 and 66).
 func TestVersionCommand(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version"}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	got := out.String()
-	if !strings.HasPrefix(got, "otelcov ") || !strings.Contains(got, "models OpenTelemetry Collector contrib v0.134.") || !strings.Contains(got, "(pdata v1.40.") {
+	if !strings.HasPrefix(got, "otelcov ") || !strings.Contains(got, "models OpenTelemetry Collector contrib v0.139.") || !strings.Contains(got, "(pdata v1.45.") {
 		t.Errorf("version output:\n%s", got)
 	}
 }

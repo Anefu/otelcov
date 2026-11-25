@@ -84,8 +84,8 @@ func requestLine(t *testing.T, s sender, at time.Time, detected bool) string {
 	return string(b)
 }
 
-// pods as kubectl prints them from a newer cluster: status.observedGeneration
-// isn't in the 1.32 API types. Running pods list their containers in
+// pods as kubectl prints them from a newer cluster: status.fromTheFuture (a
+// made-up field) isn't in the API types. Running pods list their containers in
 // status.containerStatuses, which k8sattributes uses to identify them.
 func podsYAML() string {
 	// Pods are named <deployment>-<pod-template-hash>-<suffix>, owned by the
@@ -116,7 +116,7 @@ func podsYAML() string {
       phase: Running
       podIP: %s
       podIPs: [{ip: %s}]
-      observedGeneration: 1
+      fromTheFuture: 1
       containerStatuses:
 %s`, name, instance, hash, rs, node, strings.ReplaceAll(containers, "ENV", env), ip, ip, statuses.String())
 	}
@@ -267,7 +267,7 @@ func TestKindSetup(t *testing.T) {
 			}
 			var podsWarning bool
 			for _, p := range rep.Problems {
-				podsWarning = podsWarning || (p.Where == "pods.yaml" && strings.Contains(p.Message, "status.observedGeneration"))
+				podsWarning = podsWarning || (p.Where == "pods.yaml" && strings.Contains(p.Message, "status.fromTheFuture"))
 			}
 			if !podsWarning {
 				t.Errorf("want a warning for the unknown pod field: %+v", rep.Problems)

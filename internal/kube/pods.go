@@ -17,7 +17,7 @@ import (
 
 // APIVersion is the Kubernetes API version of the k8s.io/api module otelcov
 // is built with (see go.mod).
-const APIVersion = "1.32"
+const APIVersion = "1.34"
 
 // Objects are the cluster objects a scenario describes: pods, and the
 // namespaces and nodes whose labels and annotations k8sattributes can copy.
@@ -59,7 +59,7 @@ func LoadPods(path string) (pods []corev1.Pod, unknown []string, err error) {
 // `kubectl get pods,namespaces,nodes -o yaml` writes).
 //
 // Fields the API types don't know are ignored and returned in unknown, with
-// list indexes collapsed ("items[*].status.observedGeneration"): objects from
+// list indexes collapsed ("items[*].status.fromTheFuture"): objects from
 // a cluster newer than APIVersion carry fields otelcov can't model yet.
 // Callers report them; hand-written fixtures should have none.
 func Load(path string) (o Objects, unknown []string, err error) {

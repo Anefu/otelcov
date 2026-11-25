@@ -110,11 +110,13 @@ blocks_storage: {backend: filesystem}
 limits:
   promote_otel_resource_attributes: "k8s.pod.name,team"
   otel_metric_suffixes_enabled: true
+  otel_label_name_underscore_sanitization: false
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.PromoteOTelResourceAttributes != "k8s.pod.name,team" || !l.OTelMetricSuffixesEnabled || l.RuntimeConfig != "" {
+	if l.PromoteOTelResourceAttributes != "k8s.pod.name,team" || !l.OTelMetricSuffixesEnabled || l.RuntimeConfig != "" ||
+		l.OTelLabelNameUnderscoreSanitization == nil || *l.OTelLabelNameUnderscoreSanitization || l.OTelLabelNamePreserveMultipleUnderscores != nil {
 		t.Errorf("limits: %+v", l)
 	}
 
@@ -139,5 +141,35 @@ func TestRuntimeConfigIsUnverified(t *testing.T) {
 	}
 	if !unverified {
 		t.Errorf("want s1 unverified because of the runtime config: %+v", out.Events)
+	}
+}
+
+// Label names keep Mimir's defaults: "key" before a single leading
+// underscore, and consecutive underscores kept. Both are limits.
+func TestLabelNameSanitization(t *testing.T) {
+	no := false
+	for name, tc := range map[string]struct {
+		limits Limits
+		want   []string
+	}{
+		"defaults": {Limits{PromoteOTelResourceAttributes: "_team,cost..center"}, []string{"key_team", "cost__center"}},
+		"off": {Limits{PromoteOTelResourceAttributes: "_team,cost..center",
+			OTelLabelNameUnderscoreSanitization: &no, OTelLabelNamePreserveMultipleUnderscores: &no}, []string{"_team", "cost_center"}},
+	} {
+		it := item("s1", pmetric.AggregationTemporalityCumulative, "m")
+		res := unit.Resource(it.Data).Attributes()
+		res.PutStr("_team", "a")
+		res.PutStr("cost..center", "b")
+		out, err := New("mimir", tc.limits).ProcessMetrics(context.Background(), []unit.Metric{it})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := unit.SeriesLabels(out.Items[0].Data)
+		if got.Get(tc.want[0]) != "a" || got.Get(tc.want[1]) != "b" {
+			t.Errorf("%s: %s, want %v", name, got, tc.want)
+		}
+	}
+	if LabelName("_team") != "key_team" || LabelName("cost..center") != "cost__center" {
+		t.Errorf("LabelName: %q %q", LabelName("_team"), LabelName("cost..center"))
 	}
 }

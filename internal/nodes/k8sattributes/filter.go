@@ -13,7 +13,7 @@ import (
 )
 
 // Filter is the processor's filter section: which pods, and which node, its
-// informers watch (contrib 0.134: config.go FilterConfig, options.go
+// informers watch (contrib 0.134 to 0.139: config.go FilterConfig, options.go
 // withFilterNode/Namespace/Labels/Fields, internal/kube/client.go
 // selectorsFromFilters). A pod the filter leaves out is invisible to the
 // processor, as if it didn't exist.

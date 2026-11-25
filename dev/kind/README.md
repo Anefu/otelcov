@@ -5,7 +5,7 @@ A small cluster running the owner's topology for real, to check otelcov against 
 ```
 vllm-chat (1 container) ─┐                       ┌─▶ Mimir 3.2.3 ── ruler ──▶ Alertmanager 0.28.1 ──▶ alert-sink
 vllm-embed (+ sidecar) ──┴─▶ agent ──▶ gateway ──┤   (OTLP, limits)   (rules)   (routes)               (logs who got paged)
-          Python OTel SDK      daemonset   0.134  └─▶ debug
+          Python OTel SDK      daemonset   0.139  └─▶ debug
                             tap ▶ recordings
 ```
 
@@ -49,7 +49,7 @@ Then, in the Tilt UI (or `tilt trigger <name>`), run the three manual resources 
    - `03-agent-badport` (the agent config in `whatif/`): both unverified, with a topology problem for the port.
    - `04-embed-no-env` (the motivating bug, below): `vllm-embed` not covered, `vllm-chat` covered.
 
-   Each also warns about pod fields otelcov doesn't know. That's expected: kind runs a newer Kubernetes than the 1.32 API types otelcov is built with.
+   Each also warns about pod fields otelcov doesn't know. That's expected when kind runs a newer Kubernetes than the 1.34 API types otelcov is built with.
 3. **compare** checks otelcov's answer against Mimir and Alertmanager for each pod. It only does this for scenarios whose collector configs are the ones deployed right now (read from the ConfigMaps) and skips the others. `agree` is what you want. `wait` means the alert is pending or not routed yet.
 
 Both steps also write a report page into `captured/`. The **reports** resource serves them, with links in Tilt's UI: *otelcov report* (`report.html`) and *real vs predicted* (`compare.html`, which is the same page with the real stack's answer in each compared cell). Pick any cell to see that pod's route through the stack: what each node did to its signal, where the route breaks, and the root cause.
@@ -112,7 +112,7 @@ Editing `config/*.yaml` redeploys too. otelcov's topology (`otelcov/topology.yam
 - otelcov's answers on real data came out as expected.
 - compare agreed for the baseline, and, after it was deployed, for the gateway PR.
 - The motivating bug: with the apps what-if (`whatif/apps-embed-no-env.yaml`) deployed, otelcov found vllm-embed not covered, broken at the recording rule with the agent's k8sattributes as the root cause, and vllm-chat still covered. compare agreed for both pods.
-- These runs used collector 0.135.0. The lab has run 0.134.1 since (decision 37).
+- These runs used collector 0.135.0. The lab ran 0.134.1 after that (decision 37), and runs 0.139.0 since decision 66; not yet run on a real cluster with 0.139.0.
 - Not yet on a real cluster: the agents' node filter (added 2026-11-24). The offline test (`snapshot/`) passes with it.
 
 ## Troubleshooting
