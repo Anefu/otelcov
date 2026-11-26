@@ -36,6 +36,9 @@ type Scenario struct {
 
 	// Root is the directory report paths are relative to.
 	Root string `json:"-"`
+	// PluginDir is where stage plugins are found (pluginhost.New); "" for
+	// $OTELCOV_PLUGINS, else next to the running executable.
+	PluginDir string `json:"-"`
 }
 
 // Snapshot is the metadata stored with recordings: the recordings themselves

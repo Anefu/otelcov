@@ -67,6 +67,11 @@ func Load(path string) (o Objects, unknown []string, err error) {
 	if err != nil {
 		return Objects{}, nil, err
 	}
+	return Parse(data, path)
+}
+
+// Parse reads objects as Load does, from data; path names it in errors.
+func Parse(data []byte, path string) (o Objects, unknown []string, err error) {
 	js, err := yaml.YAMLToJSON(data)
 	if err != nil {
 		return Objects{}, nil, fmt.Errorf("%s: %w", path, err)
@@ -273,3 +278,21 @@ func ContainerNames(pod *corev1.Pod) []string {
 
 // Ref formats a pod as namespace/name.
 func Ref(pod *corev1.Pod) string { return pod.Namespace + "/" + pod.Name }
+
+// Marshal writes objects as a JSON List that Parse reads back.
+func Marshal(o Objects) ([]byte, error) {
+	items := make([]any, 0, len(o.Pods)+len(o.Namespaces)+len(o.Nodes))
+	for _, p := range o.Pods {
+		p.APIVersion, p.Kind = "v1", "Pod"
+		items = append(items, p)
+	}
+	for _, n := range o.Namespaces {
+		n.APIVersion, n.Kind = "v1", "Namespace"
+		items = append(items, n)
+	}
+	for _, n := range o.Nodes {
+		n.APIVersion, n.Kind = "v1", "Node"
+		items = append(items, n)
+	}
+	return json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": items})
+}

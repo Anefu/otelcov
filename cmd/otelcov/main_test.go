@@ -55,15 +55,15 @@ func TestScenarioCommand(t *testing.T) {
 	}
 }
 
-// The collector versions come from the linked modules, so they can't drift
-// from the collector-contrib pin (decisions 63 and 66).
+// The collector versions come from the modules linked into the plugin, so
+// they can't drift from the collector-contrib pin (decisions 63, 66, 67).
 func TestVersionCommand(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version"}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	got := out.String()
-	if !strings.HasPrefix(got, "otelcov ") || !strings.Contains(got, "models OpenTelemetry Collector contrib v0.139.") || !strings.Contains(got, "(pdata v1.45.") {
+	if !strings.HasPrefix(got, "otelcov ") || !strings.Contains(got, "plugin otelcov-plugin-otelcol-contrib: models otelcol-contrib 0.139.0, reviewed for 0.134–0.139 (collector-contrib v0.139.0, pdata v1.45.") {
 		t.Errorf("version output:\n%s", got)
 	}
 }

@@ -3,6 +3,8 @@ version: 1
 collectors:
   collector:
     config: collector/collector.yaml
+    distribution: otelcol-contrib
+    version: 0.134.1
     tap: metrics/tap
 backends:
   mimir-otlp:

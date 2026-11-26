@@ -50,4 +50,15 @@ import (
 	_ "go.opentelemetry.io/collector/pipeline"
 	_ "go.opentelemetry.io/collector/processor"
 	_ "go.opentelemetry.io/collector/processor/processortest"
+
+	// Plugins: the process framework, gRPC, and what generated protobuf code imports.
+	_ "github.com/hashicorp/go-hclog"
+	_ "github.com/hashicorp/go-plugin"
+	_ "google.golang.org/grpc"
+	_ "google.golang.org/grpc/codes"
+	_ "google.golang.org/grpc/status"
+	_ "google.golang.org/protobuf/proto"
+	_ "google.golang.org/protobuf/reflect/protoreflect"
+	_ "google.golang.org/protobuf/runtime/protoimpl"
+	_ "google.golang.org/protobuf/types/known/structpb"
 )

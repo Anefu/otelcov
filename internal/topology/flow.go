@@ -6,17 +6,18 @@ import (
 	"github.com/Anefu/otelcov/internal/collector"
 	"github.com/Anefu/otelcov/internal/flowgraph"
 	"github.com/Anefu/otelcov/internal/nodes/mimir"
-	"github.com/Anefu/otelcov/internal/nodes/realproc"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
+	"github.com/Anefu/otelcov/internal/pluginhost"
 )
 
 // Flow returns the graph of the sources and collectors: each modeled pipeline's
 // processors and exporters, in the order data goes through them, following
 // joins from the tapped collectors. Node IDs match the runner's lineage node
 // names. Backends that exporters are joined to are included; what reads them
-// is added by the caller.
-func Flow(f *File, v *Validation) (flowgraph.Graph, error) {
+// is added by the caller. procNote notes a processor type in a collector,
+// as Runner.ProcessorNote does.
+func Flow(f *File, v *Validation, procNote func(collector, typ string) string) (flowgraph.Graph, error) {
 	var g flowgraph.Graph
 	g.AddNode(flowgraph.Node{ID: source.Name, Group: "source", Label: "Tap recording", Kind: flowgraph.Source})
 	g.AddNode(flowgraph.Node{ID: sdkenv.Name, Group: "source", Label: "SDK environment", Kind: flowgraph.Source,
@@ -53,7 +54,7 @@ func Flow(f *File, v *Validation) (flowgraph.Graph, error) {
 			for _, id := range p.Processors {
 				name := processorName(cfg, c, coll, pid, id)
 				g.AddNode(flowgraph.Node{ID: name, Group: coll, Label: strings.TrimPrefix(name, coll+"/"),
-					Kind: flowgraph.Processor, Note: processorNote(collector.Type(id))})
+					Kind: flowgraph.Processor, Note: procNote(coll, collector.Type(id))})
 				g.AddEdge(flowgraph.Edge{From: prev, To: name, Note: edgeNote})
 				prev, edgeNote = name, ""
 			}
@@ -119,15 +120,14 @@ func BackendFlowNode(backend, typ string) flowgraph.Node {
 	return n
 }
 
-func processorNote(typ string) string {
-	switch {
-	case typ == "batch", typ == "memory_limiter":
-		return "passes data through"
-	case typ == "k8sattributes", typ == "resourcedetection", realproc.Supported(typ):
-		return ""
-	default:
-		return "not modeled: results after it are unverified"
+// ProcessorNote is the flow graph's note for a processor type in a
+// collector, from the plugin that models the collector.
+func (r *Runner) ProcessorNote(coll, typ string) string {
+	p := r.plugins[coll]
+	if p == nil {
+		return pluginhost.NotModeled
 	}
+	return p.Info().ProcessorNote(typ)
 }
 
 func usesAny(list []string, set map[string]bool) bool {

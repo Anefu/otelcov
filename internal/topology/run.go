@@ -4,17 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	corev1 "k8s.io/api/core/v1"
 
 	"github.com/Anefu/otelcov/internal/collector"
 	"github.com/Anefu/otelcov/internal/graph"
-	"github.com/Anefu/otelcov/internal/kube"
 	"github.com/Anefu/otelcov/internal/lineage"
-	"github.com/Anefu/otelcov/internal/nodes/k8sattributes"
-	"github.com/Anefu/otelcov/internal/nodes/realproc"
-	"github.com/Anefu/otelcov/internal/nodes/resourcedetection"
+	"github.com/Anefu/otelcov/internal/pluginhost"
 	"github.com/Anefu/otelcov/internal/unit"
 )
 
@@ -23,14 +18,9 @@ const CopyNode = "topology"
 
 // Inputs are what a run needs besides the topology.
 type Inputs struct {
-	// Cluster is the config under test's pods, namespaces and nodes
-	// (k8sattributes looks them up).
-	Cluster kube.Objects
-	// SnapshotPods were running at recording time.
-	SnapshotPods []corev1.Pod
-	// ResourceDetection holds recorded detections per collector, then
-	// processor ID.
-	ResourceDetection map[string]map[string]resourcedetection.Recorded
+	// Plugins model the collectors' processors (decision 67): each
+	// collector's distribution and version picks one.
+	Plugins *pluginhost.Host
 }
 
 // Runner moves items through the collectors, following joins.
@@ -42,29 +32,59 @@ type Runner struct {
 	ids     *lineage.IDs
 	configs map[string]*collector.Config
 	nodes   map[string][]graph.MetricsNode // per collector/pipeline
+	// plugins models each collector's processors; noPlugin says why a
+	// collector has none.
+	plugins  map[string]*pluginhost.Plugin
+	noPlugin map[string]string
 	// Delivered collects, per backend, the items that reach it.
 	Delivered map[string][]unit.Metric
 }
 
-// NewRunner prepares a run. Feature gates of all collectors are applied to
-// the process-wide registry (Validate rejects conflicting settings).
-func NewRunner(f *File, v *Validation, in Inputs, log *lineage.Log) (*Runner, error) {
+// NewRunner prepares a run: it picks the plugin for each collector's
+// distribution and version and starts it with the feature gates of the
+// collectors it models (Validate rejects conflicting settings). A collector
+// without a plugin gets a problem, and its processors are unverified.
+func NewRunner(ctx context.Context, f *File, v *Validation, in Inputs, log *lineage.Log) (*Runner, error) {
 	r := &Runner{f: f, v: v, in: in, log: log, ids: lineage.NewIDs("c"),
-		configs: map[string]*collector.Config{}, nodes: map[string][]graph.MetricsNode{}, Delivered: map[string][]unit.Metric{}}
+		configs: map[string]*collector.Config{}, nodes: map[string][]graph.MetricsNode{}, Delivered: map[string][]unit.Metric{},
+		plugins: map[string]*pluginhost.Plugin{}, noPlugin: map[string]string{}}
+	var order []*pluginhost.Plugin
+	gates := map[*pluginhost.Plugin][]string{}
 	for _, name := range Names(f.Collectors) {
 		cfg, err := f.LoadCollector(name)
 		if err != nil {
 			return nil, err
 		}
 		r.configs[name] = cfg
-		for _, g := range f.Collectors[name].FeatureGates {
-			id, on := g, true
-			if g != "" && g[0] == '-' {
-				id, on = g[1:], false
+		c := f.Collectors[name]
+		var why string
+		switch {
+		case c.Distribution == "" || c.Version == "":
+			why = "the topology doesn't say which distribution and version collector " + name + " runs (`distribution`, `version`)"
+		case in.Plugins == nil:
+			why = "no stage plugins are available"
+		default:
+			p, w, err := in.Plugins.Resolve(c.Distribution, c.Version)
+			if err != nil {
+				return nil, err
 			}
-			if err := featuregate.GlobalRegistry().Set(id, on); err != nil {
-				return nil, fmt.Errorf("%s: feature gate %s: %w", name, id, err)
+			if p != nil {
+				if _, ok := gates[p]; !ok {
+					order = append(order, p)
+				}
+				gates[p] = append(gates[p], c.FeatureGates...)
+				r.plugins[name] = p
+				continue
 			}
+			why = w
+		}
+		r.noPlugin[name] = why
+		v.Problems = append(v.Problems, Problem{Severity: Unverified, Where: name,
+			Message: why + ", so its processors are unverified"})
+	}
+	for _, p := range order {
+		if err := in.Plugins.Start(ctx, p, gates[p]); err != nil {
+			return nil, err
 		}
 	}
 	return r, nil
@@ -214,7 +234,11 @@ func (r *Runner) pipelineNodes(ctx context.Context, coll, pid, node string) ([]g
 	var nodes []graph.MetricsNode
 	for _, id := range cfg.Service.Pipelines[pid].Processors {
 		name := processorName(cfg, r.f.Collectors[coll], coll, pid, id)
-		nodes = append(nodes, r.processorNode(ctx, coll, name, id, cfg.Processors[id], node))
+		n, err := r.processorNode(ctx, coll, name, id, cfg.Processors[id], node)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, n)
 	}
 	r.nodes[key] = nodes
 	return nodes, nil
@@ -244,36 +268,12 @@ func processorName(cfg *collector.Config, c Collector, coll, pid, id string) str
 // exporterName is an exporter's node name in lineage.
 func exporterName(coll, exp string) string { return coll + "/" + exp }
 
-func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw map[string]any, node string) graph.MetricsNode {
-	switch typ := collector.Type(id); {
-	case typ == "batch", typ == "memory_limiter":
-		// They only regroup or shed load; they don't change data.
-		return graph.PassThrough{NodeName: name}
-	case typ == "k8sattributes":
-		n, err := k8sattributes.New(name, raw, r.in.Cluster, k8sattributes.Instance{Node: node, Env: r.f.Collectors[coll].Env})
-		if err != nil {
-			return graph.Unsupported{NodeName: name, Reason: err.Error()}
-		}
-		return n
-	case typ == "resourcedetection":
-		var rec *resourcedetection.Recorded
-		if v, ok := r.in.ResourceDetection[coll][id]; ok {
-			rec = &v
-		}
-		n, err := resourcedetection.New(name, raw, rec, r.in.SnapshotPods, node)
-		if err != nil {
-			return graph.Unsupported{NodeName: name, Reason: err.Error()}
-		}
-		return n
-	case realproc.Supported(typ):
-		n, err := realproc.New(ctx, name, id, raw, r.ids)
-		if err != nil {
-			return graph.Unsupported{NodeName: name, Reason: err.Error()}
-		}
-		return n
-	default:
-		return graph.Unsupported{NodeName: name, Reason: "processor type " + typ + " isn't modeled yet"}
+func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw map[string]any, node string) (graph.MetricsNode, error) {
+	p := r.plugins[coll]
+	if p == nil {
+		return graph.Unsupported{NodeName: name, Reason: r.noPlugin[coll]}, nil
 	}
+	return p.Stage(ctx, "processor", id, name, raw, pluginhost.Instance{Collector: coll, Node: node, Env: r.f.Collectors[coll].Env}, r.ids)
 }
 
 // copies duplicates items for another branch, with new IDs.

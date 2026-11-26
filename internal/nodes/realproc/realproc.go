@@ -59,6 +59,16 @@ func Supported(typ string) bool {
 	return ok
 }
 
+// Types lists the processor types that run as real code, sorted.
+func Types() []string {
+	out := make([]string, 0, len(factories))
+	for t := range factories {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // byMetric lists processors that can look across a metric's data points
 // (metric-context OTTL, aggregations), so they run on whole metric groups.
 var byMetric = map[string]bool{"transform": true, "filter": true, "metricstransform": true}

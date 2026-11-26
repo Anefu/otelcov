@@ -4,10 +4,14 @@ version: 1
 collectors:
   agent:
     config: collector/agent-namespace-team.yaml
+    distribution: otelcol-contrib
+    version: 0.134.1
     sha256: eced735e5c50a2f04e10af17d2a0989e998bf33ed98a5306d06224dbbb5813fd
     tap: metrics/tap
   gateway:
     config: collector/gateway-pr.yaml
+    distribution: otelcol-contrib
+    version: 0.134.1
     sha256: c9f9d974eee880417a26e9cac569283f11bd087c3589c06eecf30f3146e67859
 backends:
   mimir:

@@ -4,6 +4,8 @@ version: 1
 collectors:
   agent:
     config: ../config/agent.yaml
+    distribution: otelcol-contrib
+    version: 0.139.0
     tap: metrics/tap
     # Records what resourcedetection adds; capture.sh turns it into snapshot
     # metadata. Not part of the modeled system.
@@ -13,6 +15,8 @@ collectors:
       K8S_NODE_NAME: {fieldRef: spec.nodeName}
   gateway:
     config: ../whatif/gateway-team-pr.yaml
+    distribution: otelcol-contrib
+    version: 0.139.0
 backends:
   mimir:
     type: mimir-otlp

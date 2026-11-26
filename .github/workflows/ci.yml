@@ -26,5 +26,14 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      - name: Check the generated plugin protocol code is current
+        run: |
+          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v28.3/protoc-28.3-linux-x86_64.zip
+          echo "0ad949f04a6a174da83cdcbdb36dee0a4925272a5b6d83f79a6bf9852076d53f  /tmp/protoc.zip" | sha256sum -c -
+          unzip -q /tmp/protoc.zip -d /tmp/protoc
+          PATH=/tmp/protoc/bin:$PATH ./proto/generate.sh
+          git diff --exit-code pkg/plugin/pluginv1
+
       - run: go vet ./...
+      # Tests that run scenarios build the stage plugins first (internal/plugintest).
       - run: go test ./...

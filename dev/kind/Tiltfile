@@ -111,7 +111,7 @@ k8s_resource('vllm-embed', resource_deps=['otel-agent'], labels=['apps'])
 
 local_resource(
     'otelcov-build',
-    cmd='cd ../.. && go build -o dev/kind/bin/ ./cmd/otelcov ./dev/kind/snapshot ./dev/kind/compare',
+    cmd='cd ../.. && go build -o dev/kind/bin/ ./cmd/otelcov ./cmd/otelcov-plugin-otelcol-contrib ./dev/kind/snapshot ./dev/kind/compare',
     deps=['../../cmd', '../../internal', '../../go.mod', '../../go.sum', 'snapshot', 'compare'],
     labels=['otelcov'],
 )

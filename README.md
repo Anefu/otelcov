@@ -40,8 +40,17 @@ apps → collectors (agent, gateway) → backends (Mimir, Loki) → recording ru
 
 otelcov runs *scenarios*: a snapshot (the recordings, one per tapped collector instance, and what was running when they were made), the config under test (pods, and a topology file naming the collector, Mimir, rules and Alertmanager configs and how they connect) and coverage requirements.
 
+The collectors' processors are modeled by a stage plugin, a separate binary for the collector distribution and version (`otelcov-plugin-otelcol-contrib`, built against collector-contrib 0.139 and reviewed for collectors 0.134 to 0.139). otelcov looks for plugins next to its own binary, so build both into one directory:
+
 ```console
-$ go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.yaml
+$ go build -o bin/ ./cmd/...
+$ bin/otelcov version
+otelcov v0.0.0-…
+plugin otelcov-plugin-otelcol-contrib: models otelcol-contrib 0.139.0, reviewed for 0.134–0.139 (collector-contrib v0.139.0, pdata v1.45.0)
+```
+
+```console
+$ bin/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.yaml
 02-sidecar-added (evaluated at 2026-10-23T10:00:30Z)
   covered              inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
       path: s1 → p1 → r1 → a1 → inference-pager
@@ -55,7 +64,7 @@ $ go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.y
 Processors explain themselves too. Here a pull request changes the condition of a gateway `transform` statement, and the rule's `team="inference"` matcher loses both pods:
 
 ```console
-$ go run ./cmd/otelcov scenario testdata/agent-gateway/scenarios/02-team-condition-pr.yaml
+$ bin/otelcov scenario testdata/agent-gateway/scenarios/02-team-condition-pr.yaml
 02-team-condition-pr (evaluated at 2026-10-23T10:00:30Z)
   NOT COVERED          inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
       path: s1 → p1 ✗ rule/team:vllm_memory_bytes:max

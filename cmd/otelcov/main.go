@@ -24,6 +24,7 @@ import (
 
 	"github.com/Anefu/otelcov/internal/htmlreport"
 	"github.com/Anefu/otelcov/internal/lineage"
+	"github.com/Anefu/otelcov/internal/pluginhost"
 	"github.com/Anefu/otelcov/internal/report"
 	"github.com/Anefu/otelcov/internal/scenario"
 	"github.com/Anefu/otelcov/internal/version"
@@ -34,13 +35,37 @@ func main() {
 }
 
 const usage = `usage:
-  otelcov scenario [-root dir] [-json] [-html report.html] scenario.yaml...
-  otelcov version`
+  otelcov scenario [-root dir] [-plugins dir] [-json] [-html report.html] scenario.yaml...
+  otelcov version [-plugins dir]
+
+Stage plugins (otelcov-plugin-*) are found in -plugins, else $OTELCOV_PLUGINS,
+else next to the otelcov binary.`
+
+const pluginsHelp = "directory of stage plugins (default: $OTELCOV_PLUGINS, else next to the otelcov binary)"
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 1 && args[0] == "version" {
-		v := version.Get()
-		fmt.Fprintf(stdout, "otelcov %s\nmodels OpenTelemetry Collector contrib %s (pdata %s)\n", v.Otelcov, v.CollectorContrib, v.Pdata)
+	if len(args) >= 1 && args[0] == "version" {
+		fs := flag.NewFlagSet("version", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		plugins := fs.String("plugins", "", pluginsHelp)
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		fmt.Fprintf(stdout, "otelcov %s\n", version.Get().Otelcov)
+		host := pluginhost.New(*plugins, pluginhost.Inputs{})
+		defer host.Close()
+		installed, err := host.Installed()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		if len(installed) == 0 {
+			fmt.Fprintf(stdout, "no stage plugins in %s\n", strings.Join(host.Dirs(), ", "))
+		}
+		for _, p := range installed {
+			fmt.Fprintf(stdout, "plugin %s: models %s %s, reviewed for %s (collector-contrib %s, pdata %s)\n",
+				filepath.Base(p.Path), p.Distribution, p.Version, p.Reviewed, p.Modules["collector-contrib"], p.Modules["pdata"])
+		}
 		return 0
 	}
 	if len(args) == 0 || args[0] != "scenario" {
@@ -52,6 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	root := fs.String("root", "", "directory report paths are relative to (default: the scenario's parent directory)")
 	asJSON := fs.Bool("json", false, "print full reports as JSON")
 	htmlOut := fs.String("html", "", "also write a report page for all scenarios to this file")
+	plugins := fs.String("plugins", "", pluginsHelp)
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -72,6 +98,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
+		s.PluginDir = *plugins
 		rep, flow, err := scenario.ReportWithFlow(context.Background(), s)
 		if err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", path, err)

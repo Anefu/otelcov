@@ -1,2 +1,4 @@
 # Vendored dependencies live on deps/<branch> branches, never on source branches.
 /vendor/
+# Binaries from `go build -o bin/ ./cmd/...`.
+/bin/

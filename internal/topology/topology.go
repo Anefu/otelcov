@@ -35,6 +35,11 @@ type File struct {
 type Collector struct {
 	Config string `json:"config"`
 	SHA256 string `json:"sha256,omitempty"`
+	// Distribution and Version say what the collector runs, e.g.
+	// otelcol-contrib 0.139.0; they pick the stage plugin that models its
+	// processors (decisions 68, 69).
+	Distribution string `json:"distribution,omitempty"`
+	Version      string `json:"version,omitempty"`
 	// Tap is the pipeline that records this collector's input, if any.
 	Tap string `json:"tap,omitempty"`
 	// SnapshotPipelines exist only to record snapshot metadata (e.g. what

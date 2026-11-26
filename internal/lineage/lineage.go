@@ -143,3 +143,10 @@ func (i *IDs) Next() SignalID {
 	i.n++
 	return SignalID(i.prefix + strconv.Itoa(i.n))
 }
+
+// NextNumber is the number the next ID gets.
+func (i *IDs) NextNumber() int64 { return int64(i.n) + 1 }
+
+// SetNextNumber makes the next ID the given number: a plugin numbers new
+// items from the number the core hands it, so IDs stay one sequence.
+func (i *IDs) SetNextNumber(n int64) { i.n = int(n) - 1 }

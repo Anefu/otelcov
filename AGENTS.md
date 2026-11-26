@@ -35,7 +35,7 @@ As far as we could find, no existing tool follows one workload's signal across c
 
 ## Status
 
-**Agent + gateway topologies work end to end**: replay, sdk-env, then the collectors as the topology file connects them (real collector-contrib processors, custom k8sattributes and resourcedetection), Mimir backend, recording rules, alerting rules, Alertmanager routing and the report. Transform and filter explain themselves per OTTL statement and condition. `otelcov scenario` runs scenarios from the command line. Daemonset agents run as one instance per node: each recording is one agent's tap, and k8sattributes' `filter` (e.g. `node_from_env_var`) decides which pods each instance sees. All thirteen scenarios match their golden reports exactly. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
+**Agent + gateway topologies work end to end**: replay, sdk-env, then the collectors as the topology file connects them (real collector-contrib processors, custom k8sattributes and resourcedetection), Mimir backend, recording rules, alerting rules, Alertmanager routing and the report. Transform and filter explain themselves per OTTL statement and condition. `otelcov scenario` runs scenarios from the command line. Daemonset agents run as one instance per node: each recording is one agent's tap, and k8sattributes' `filter` (e.g. `node_from_env_var`) decides which pods each instance sees. The collectors' processors run in a stage plugin, a separate process (`otelcov-plugin-otelcol-contrib`, decision 67); the core doesn't link collector-contrib code. All thirteen scenarios match their golden reports exactly. Repository: `github.com/Anefu/otelcov`, Apache-2.0.
 
 - `testdata/thin-slice/`: the first end-to-end slice, one collector (4 scenarios). See its README.
 - `testdata/agent-gateway/`: daemonset agents + gateway, the owner's topology (9 scenarios). See its README.
@@ -184,13 +184,15 @@ Other deployment patterns and backends come later, as adapters.
     agent:
       config: rendered/otel-agent.yaml
       sha256: …
+      distribution: otelcol-contrib    # what the collector runs: picks the stage plugin (decisions 68, 69)
+      version: 0.134.1
       tap: metrics/tap                 # the pipeline that records this collector's input
       snapshot_pipelines: [metrics/detected]   # pipelines that only record snapshot metadata; skipped like the tap
       feature_gates: [some.gate, -other.gate]   # as passed with --feature-gates
       env:                             # the collector's environment: ${env:VAR} in the config, and k8sattributes' filter.node_from_env_var
         GATEWAY_ENDPOINT: "otel-gateway:4317"
         K8S_NODE_NAME: { fieldRef: spec.nodeName }   # per instance: the node of the recording (decision 65)
-    gateway: { config: rendered/otel-gateway.yaml, sha256: … }
+    gateway: { config: rendered/otel-gateway.yaml, sha256: …, distribution: otelcol-contrib, version: 0.134.1 }
   backends:
     mimir: { type: mimir-otlp, config: rendered/mimir-limits.yaml, sha256: … }
   consumers:
@@ -206,6 +208,7 @@ Other deployment patterns and backends come later, as adapters.
 - **How a run follows it** (`internal/topology`):
   - Each recording's items enter its collector (the recording's `collector`, or the only tapped one) at the tap pipeline's receivers, as the collector instance on the recording's `node`, and go through every other metrics pipeline using those receivers, processor by processor, in config order. Recordings run one after another, in the order the snapshot lists them.
   - Processors are built per instance: each node's agent has its own (k8sattributes' filter and resourcedetection's host depend on the node), with the same lineage node names. Collectors reached through joins (a gateway) run as one shared instance whose node isn't known.
+  - Processors are stages in the collector's **stage plugin** (decision 67): the installed plugin for the collector's `distribution` whose reviewed range includes its `version` (decision 68). A collector without one (no `distribution`/`version`, no plugin for the distribution, or a version outside every reviewed range) gets an `unverified` problem ("no plugin was reviewed for otelcol-contrib 0.140.0; installed: otelcol-contrib 0.139.0 (reviewed for 0.134–0.139), so its processors are unverified"), and its processors pass data through with `unverified` events.
   - A pipeline's exporters: joined to a receiver → the next collector's pipelines using that receiver; joined to a backend → delivered to that backend; listed in `external` → an `exported` event, and the data leaves the modeled system.
   - Fan-out (a receiver feeding a second pipeline, a pipeline with a second exporter) copies the items with new IDs `c1, c2, ...`: node `topology`, action `derived`, `from` the original. The first branch keeps the original IDs.
   - Data crossing a join that validation couldn't trust still flows, so the rest of the path is checked, but every item gets an `unverified` event at the exporter (node `<collector>/<exporter id>`).
@@ -214,11 +217,11 @@ Other deployment patterns and backends come later, as adapters.
   - **unverified** (paths through the join are unverified): the exporter's port differs from the receiver's; the receiver doesn't enable the exporter's protocol (`otlp` = gRPC, `otlphttp` = HTTP); the receiver listens on localhost only (its default since collector 0.104 is `localhost:4317`/`4318`); non-OTLP exporters or receivers; a gRPC `otlp` exporter joined to Mimir, which takes OTLP over HTTP.
   - **warning** (reported, results trusted): a config's hash differs from the topology's `sha256`; a receiver feeds a pipeline but isn't tapped, so its data isn't in recordings; an endpoint holds an `${env:...}` reference without a value under `env`, so ports can't be compared.
   - Problems are in the report's `problems` section and printed by the CLI.
-- **Feature gates** of all collectors are applied to the collector's process-wide registry before processors are built.
+- **Feature gates** of the collectors a plugin models are applied to that plugin process's registry before its processors are built.
 
 ### Extensibility
 
-- **Plugin design** (decision 67; replaces decision 22's compiled-in Go). Not built yet; today's nodes are still compiled in.
+- **Plugin design** (decision 67; replaces decision 22's compiled-in Go). Built so far: the stage protocol (`proto/otelcov/plugin/v1/stage.proto`, Go code in `pkg/plugin/pluginv1`, go-plugin glue in `pkg/plugin`), the **otelcol-contrib distribution plugin** (`cmd/otelcov-plugin-otelcol-contrib`, `internal/plugins/otelcolcontrib`: the real processors, the k8sattributes and resourcedetection models, batch and memory_limiter as pass-throughs; reviewed range 0.134–0.139) and the core's host (`internal/pluginhost`). Not yet: Prometheus and Alertmanager plugins, sources, outputs, failure-mode packs, and fidelity in verdicts (statuses are unchanged until then).
   - **Small core**: the core runs the topology graph, follows lineage and reaches verdicts. Everything else is a plugin, at five extension points: **stages** (processors, backends, rules, routes: telemetry in, telemetry out), **sources** (recordings: files or a live OTLP stream from the tap; inventory: a pods file or the live Kubernetes API), **report outputs** (JSON and HTML; Prometheus metrics of coverage when live), and **failure-mode packs** (mutations to test against, e.g. "a sidecar is added").
   - **One stage interface**: `Kind`, `Fidelity`, `Configure`, `Apply`, as in the owner's draft.
   - **Out of process, over gRPC, from the start**: plugins are separate binaries, one per upstream version they're built against (e.g. collector processors built against contrib 0.139 and against 0.166), so one run can model a mixed-version topology, and each plugin builds with its own Go toolchain.
@@ -381,7 +384,7 @@ Other deployment patterns and backends come later, as adapters.
 | 60 | Renamed metrics, option 1 (name variants): a series is a selector near miss on `__name__` when its name has the same words as the selector's metric name apart from the suffixes Prometheus's OTLP translation adds (unit, `per_<unit>`, `total`, `ratio`; histogram `bucket`/`count`/`sum` must agree) and separators. The diagnosis follows it to Mimir's translation and to the last processor that changed the metric's name or unit | 2: follow lineage from the series back to its OTLP metric and compare with what the selected name would come from; both | Covers the reproduced case (suffixes turned off) and unit changes with a small, local check; option 2 also covers renames to other words but needs the rule explainer to see lineage, so it waits (Known gaps) |
 | 61 | k8sattributes models every attribute upstream extracts, including labels and annotations from the pod, its namespace and its node, in upstream's order and precedence. Namespaces and nodes are new inputs, read from the scenario's cluster file | Pod-level attributes only (no namespace or node objects); also Deployment and StatefulSet objects | Owner's choice ("also namespace/node"). Unmodeled attributes were `unverified`, and upstream's defaults extract image name and tag, so default configs got `unverified` events. Deployment and StatefulSet objects wait (Known gaps) |
 | 62 | Requirements can come from policies written in CEL. A policy is a subject, a predicate and an object: subjects are selected by a CEL expression over a pod's facts (namespace, labels), and the condition is a CEL expression over the facts otelcov computes for that pod (the alerts that fire for it, with their receivers, labels and source signals). The object can be named ("`VLLMMemoryHigh`") or quantified ("some alert reaching `{{ team }}-pager`"). Failures are diagnosed in three cases: a regression in a diff (explain the path that was lost), a near miss (explain the closest misses from recorded drops and routes), or unwatched (nothing selects the pod's metrics). Severity is block or warn. No estate graph (catalog integration, graph store, query API). Built after the k8sattributes `filter` fix and before the design-partner bar | Extending format A's YAML with `policies:`; Rego over otelcov's facts; a full estate graph with owners and tiers from a catalog; keeping hand-written requirements only | Owner's choice. Hand-written requirements can't see workloads nobody wrote one for; policies over labels can, without building a graph. CEL is familiar from Kubernetes admission policies and can't loop or recurse. Explaining a failed free-form expression is harder than with format A's fixed structure (see Open questions) |
-| 63 | Versions track the collector-contrib release otelcov models: git tags `v0.<contrib minor>.<patch>`, so `v0.134.x` while pinned to collector-contrib 0.134 (decision 37) and a new minor when the pin moves; otelcov's own changes bump the patch. Released as tags only (`go install github.com/Anefu/otelcov/cmd/otelcov@v0.134.0`). `otelcov version` and every report (`otelcov` section) carry otelcov's version and the collector-contrib and pdata versions, read from the binary's build information | SemVer `v0.x` independent of the collector; CalVer; GitHub releases with binaries (GoReleaser); binaries plus a container image | Owner's choice. The version says at a glance which collector otelcov's answers are valid for. Before 1.0 a breaking change to otelcov's own formats (requirements, policies, report) can only show in the patch number, so the tag's notes must say so |
+| 63 | Versions track the collector-contrib release otelcov models: git tags `v0.<contrib minor>.<patch>`, so `v0.134.x` while pinned to collector-contrib 0.134 (decision 37) and a new minor when the pin moves; otelcov's own changes bump the patch. Released as tags only (`go install github.com/Anefu/otelcov/cmd/otelcov@v0.134.0`). `otelcov version` and every report (`otelcov` section) carry otelcov's version and the collector-contrib and pdata versions, read from the binary's build information (since decision 67, from the plugins' build information) | SemVer `v0.x` independent of the collector; CalVer; GitHub releases with binaries (GoReleaser); binaries plus a container image | Owner's choice. The version says at a glance which collector otelcov's answers are valid for. Before 1.0 a breaking change to otelcov's own formats (requirements, policies, report) can only show in the patch number, so the tag's notes must say so |
 | 64 | Recordings are listed in the snapshot metadata (`recordings`), one per collector instance's tap, each with its `collector` (optional when only one collector has a tap) and Kubernetes `node` (optional). This replaces the scenario's `data.recording`. A run feeds each recording into its collector as the instance on that node | Listing recordings in the scenario file; one file per node by naming convention; keeping `data.recording` alongside the list (alternatives as recalled after a context reset) | Owner's choice. A daemonset agent's behavior depends on its node (k8sattributes `filter`, resourcedetection), so otelcov must know which agent received each line; the snapshot is where facts about the recording live. The kind capture already had one tap file per node |
 | 65 | The topology's `env` takes `{fieldRef: spec.nodeName}` as well as literal values: the variable then holds each collector instance's own node, as the downward API gives it to a daemonset's pods. k8sattributes' `filter.node_from_env_var` reads it; `${env:VAR}` substitution only uses literals | Assuming `node_from_env_var` always names the instance's node; per-recording env values in the snapshot metadata (alternatives as recalled after a context reset) | Owner's choice. It says what the collector's manifest says, so the topology stays the place for collector facts, and a missing variable is reported rather than assumed |
 | 66 | Move the pin to collector-contrib **0.139** (core v1.45.0/v0.139.0, `pdata` v1.45.0, Go 1.24), with Prometheus v0.307.1 (3.7.1), `prometheus/common` v0.67.2, `otlptranslator` v1.0.0 and Kubernetes API types v0.34.1, the versions contrib 0.139 uses; Alertmanager stays v0.28.1. The first release is `v0.139.0` (decision 63 unchanged). The kind lab runs the 0.139.0 image | Tag `v0.139.0` on 0.134 code, with the tag meaning the highest collector version otelcov's answers hold for (changing decision 63's rule); keep Prometheus 3.5 (amending 45); keep Kubernetes 0.32 (amending 41) | Owner's choice. A review of collector-contrib 0.135–0.139 (changelogs, and code of every modeled component) found no change in behavior for configs 0.134 accepts, only added settings, so answers hold for collectors 0.134–0.139 and the tag says what otelcov is built against. With the dependencies moved, every golden report stayed the same. Prometheus 3.7's translator needed the Mimir node to collect series from an appender and Mimir's label-name defaults set explicitly (otlptranslator v1's defaults differ); rule files are parsed with UTF-8 names, as before. 0.140 is the first release whose changes otelcov doesn't model (see Collector versions under Gotchas) |
@@ -407,6 +410,16 @@ Chosen while building decision 47 (the owner was away); each is easy to change:
 - **transform, filter and metricstransform always run in the metric unit**, rather than choosing the unit from their statements (decision 39 allows either). Item-level behavior is the same; it only costs precision when a group's outputs can't be matched to single inputs.
 - **resource_detection snapshot format** (see Snapshot metadata), keyed by collector then processor ID, with the processor's config recorded so changed detector settings give `unverified`. A gateway's values should be under `*`: per-node keys are looked up by the *app* pod's node, which is only right for daemonsets.
 - **Statement explanations**: a `skipped` statement is hidden when another statement set the same attribute, so the diagnosis doesn't blame a statement that didn't matter.
+
+Chosen while building decision 67 (the first stage plugin):
+
+- **The protocol's details** (the proposed default for "data across the boundary"): units as OTLP protobuf; lineage values, details and resources as JSON decoded with `json.Number`, so reports read exactly as before; the core hands each Apply call the next `c` number and the plugin reports how many it used, so IDs stay one sequence; units go in batches of up to 64 MB, in order (processors run per unit, so batching doesn't change results).
+- **One plugin process per run**, started when the run needs it; `Init` once per process, with the feature gates of every collector it models (process-wide, as in the collector).
+- **Where plugins are found**: `-plugins dir`, else `$OTELCOV_PLUGINS`, else next to the otelcov binary; files named `otelcov-plugin-*`. Tests build the plugins first (`internal/plugintest`).
+- **No `distribution`/`version` in the topology is `unverified`**, with a problem, rather than fatal or a default version.
+- **Fidelity as declared by the otelcol-contrib plugin**: real processors `real`; k8sattributes `reimplementation` with conformance (its ported upstream cases pass); resourcedetection `reimplementation` without (no upstream cases ported); batch and memory_limiter `approximation` (pass-through). Not used in verdicts yet.
+- **Reports' `otelcov` section** lists the plugins a run used (`plugins`: distribution, version, reviewed range, modules) instead of `collector_contrib` and `pdata`; `otelcov version` lists the installed plugins.
+- **The public API is `pkg/plugin`** (handshake, `Serve`, `Start`) and `pkg/plugin/pluginv1`, so plugins can live in other repositories later; conversions (`internal/pluginwire`) stay internal.
 
 Chosen while building decisions 64 and 65 (k8sattributes `filter`):
 
@@ -453,6 +466,8 @@ Chosen while building the report page (decision 49):
 
 ## Known gaps
 
+- **A drop after an unmodeled stage is `not_covered`, not `unverified`**: a stage otelcov can't model passes data through with an `unverified` event, but the diagnosis takes the deepest `dropped` event first, so when a later rule drops the series for a missing label (one the unmodeled stage might have set), the answer is "not covered". It was so before plugins (an `Unsupported` processor); with plugins it also happens when no plugin fits a collector's version, so every pod comes out "not covered". Possible fix: a drop whose missing label an upstream `unverified` stage could have set makes the answer `unverified`.
+
 - **A metric renamed to other words leaves no trace** (found 2026-10-24, narrowed by decision 60): a series under another name for the selector's metric is a near miss only when the words are the same apart from translation suffixes and separators. A rename to other words (a `metricstransform` or transform `set(metric.name, ...)` rename, `process.memory.used` for `process.memory.usage`) and suffixes from units outside the translator's unit map (`{requests}` is dropped, but `items` becomes `_items`) still leave the selector ignoring the series like any unrelated one: the pod comes out `unverified`, "the signal reaches no alert and nothing explains why". Possible fix: count a series as a near miss when it comes from the same OTLP metric as the selected name would, following lineage back to the recorded metric.
 - **k8sattributes without ReplicaSet, Deployment and StatefulSet objects** (decision 61): upstream reads the Deployment of a pod from its ReplicaSet object; otelcov derives the name from the ReplicaSet owner and the pod's `pod-template-hash` label (Kubernetes names a Deployment's ReplicaSets `<deployment>-<hash>`), and reports `k8s.deployment.uid` (and, without Job objects, `k8s.cronjob.uid`) as `unverified`. Labels and annotations `from: deployment`, `statefulset`, `daemonset` or `job` make the node `Unsupported`. Loading those objects from the cluster file, like namespaces and nodes, would close this.
 
@@ -468,12 +483,12 @@ Chosen while building the report page (decision 49):
   - **Dependency**: `github.com/google/cel-go`, vendored through the CI round trip.
 
 - **Plugin design, details to settle before building** (decision 67 settled the shape):
-  - **Data across the boundary**: proposed default, OTLP protobuf per processing unit, sent in batches per stage call, with the envelope (IDs, parents) beside it; the core assigns IDs, plugins refer to inputs by position.
   - **Conformance results**: how a plugin reports which versions its ported cases pass for (metadata from CI), and how the ports are kept in sync with upstream (decision 51).
   - **Building a distribution's plugin**: from its builder manifest, like the collector's own builder, so custom distributions get one too.
   - **Live mode**: window length and cadence, output metric names.
   - **Failure-mode packs**: the mutation format, and how results are reported.
-  - **Migration**: today's nodes (source, sdk-env, real processors, k8sattributes, resourcedetection, Mimir, rules, alerts, routes) become plugins, in what order.
+  - **Migration**: the collector distribution is done (decision 67's first step); still in the core: source, sdk-env, Mimir, rules, alerts and routes. In what order they move.
+  - **Fidelity in verdicts**: applying decisions 67 and 68 ("covered (modelled)", merging `covered_simulated`) changes every golden report.
 
 - **Bringing upstream k8sattributes tests in and keeping them in sync** (decision 51). Cases are ported for now (`internal/nodes/k8sattributes/upstream_test.go` for container identification, `upstream_attrs_test.go` for pod, container, namespace and node attributes and image parsing, each naming its upstream file, test and case); what keeps them in sync is still open. Upstream tests come in two layers: `processor_test.go` feeds the processor pre-built cache entries (`kube.Pod{Containers: ByName/ByID}`), and `internal/kube/client_test.go` checks how a Kubernetes pod becomes those entries. otelcov's model goes from a pod straight to attributes, so each case has to be translated, and Go can't import another module's `_test.go` files or `internal/` packages, so the tests can't be called directly. Options:
   - **Port with provenance, plus a drift check**: each case keeps the upstream file, test and case name and the version; a test reads the upstream test files from the Go module cache at the pinned version (module downloads include `_test.go` files) and fails when their hash differs from the one recorded at the last port, naming the changed tests, so a version bump forces a re-port.
@@ -556,6 +571,13 @@ GOFLAGS=-mod=vendor go test ./...
 
 ### Releasing (decision 63)
 
+Install both the CLI and the stage plugins; otelcov finds plugins next to its binary:
+
+```sh
+go install github.com/Anefu/otelcov/cmd/...@v0.139.0 && otelcov version
+```
+
+
 ```sh
 # Tag main with v0.<collector-contrib minor>.<patch>; say in the tag message what changed, breaking changes first
 git tag -a v0.139.0 -m "..." && git push origin v0.139.0
@@ -568,8 +590,14 @@ A local `go build` reports a pseudo-version from git (`v0.0.0-<date>-<commit>`, 
 ### Running
 
 ```sh
-GOFLAGS=-mod=vendor go run ./cmd/otelcov scenario testdata/thin-slice/scenarios/*.yaml
-GOFLAGS=-mod=vendor go run ./cmd/otelcov scenario testdata/agent-gateway/scenarios/*.yaml
+# The CLI and the stage plugins into one directory (otelcov finds plugins next to itself;
+# `go run` doesn't put them there, so every processor would come out unverified)
+GOFLAGS=-mod=vendor go build -o bin/ ./cmd/...
+bin/otelcov scenario testdata/thin-slice/scenarios/*.yaml
+bin/otelcov scenario testdata/agent-gateway/scenarios/*.yaml
+
+# After changing proto/: regenerate pkg/plugin/pluginv1 (needs protoc 28.3 on PATH; CI checks it)
+GOFLAGS=-mod=vendor ./proto/generate.sh
 
 # kind lab (owner's laptop): see dev/kind/README.md
 kind create cluster --config dev/kind/kind.yaml && tilt up -f dev/kind/Tiltfile
@@ -598,6 +626,9 @@ AGENTS.md                 this file
 README.md                 human-facing overview
 LICENSE                   Apache-2.0
 cmd/otelcov               the CLI
+cmd/otelcov-plugin-otelcol-contrib  the stage plugin for otelcol-contrib (internal/plugins/otelcolcontrib)
+proto/                    the stage plugin protocol (protobuf) and generate.sh
+pkg/plugin                plugin handshake, Serve and Start (hashicorp/go-plugin); pluginv1 is the generated protocol code
 go.mod, go.sum            module github.com/Anefu/otelcov
 internal/deps/tools.go    packages pinned for vendoring (build tag `tools`)
 internal/lineage          signal IDs, events, the run's log
@@ -617,6 +648,10 @@ internal/flowgraph        a scenario's components and how they connect, for the 
 internal/htmlreport       the self-contained report page (page.html)
 internal/version          otelcov and collector versions, from the build information
 internal/scenario         scenario loading, runs, golden tests
+internal/pluginhost       the core's side of plugins: finding them, picking one per collector, stages over gRPC
+internal/pluginwire       units and lineage to and from the protocol
+internal/plugins/...      plugins built in this repository
+internal/plugintest       builds the plugins for tests that run scenarios
 internal/nodes/...        one package per node; nodetest has test helpers
 internal/nodes/realproc   real collector-contrib processors, OTTL statement and condition explanations
 .github/workflows/ci.yml      gofmt, tidy, vet, tests, fixture check

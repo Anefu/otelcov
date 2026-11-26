@@ -20,11 +20,13 @@ import (
 	"github.com/Anefu/otelcov/internal/nodes/rules"
 	"github.com/Anefu/otelcov/internal/nodes/sdkenv"
 	"github.com/Anefu/otelcov/internal/nodes/source"
+	"github.com/Anefu/otelcov/internal/pluginhost"
 	"github.com/Anefu/otelcov/internal/report"
 	"github.com/Anefu/otelcov/internal/requirements"
 	"github.com/Anefu/otelcov/internal/rulefile"
 	"github.com/Anefu/otelcov/internal/topology"
 	"github.com/Anefu/otelcov/internal/unit"
+	"github.com/Anefu/otelcov/internal/version"
 )
 
 // Result is the outcome of a run.
@@ -39,6 +41,9 @@ type Result struct {
 	Problems []topology.Problem
 	// Flow is how the components connect, with lineage node names as IDs.
 	Flow flowgraph.Graph
+
+	// Plugins are the stage plugins the run used.
+	Plugins []pluginhost.Info
 
 	pods []corev1.Pod
 }
@@ -136,7 +141,9 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		return nil, err
 	}
 
-	runner, err := topology.NewRunner(topo, val, topology.Inputs{Cluster: cluster, SnapshotPods: snapPods, ResourceDetection: snap.ResourceDetection}, log)
+	host := pluginhost.New(s.PluginDir, pluginhost.Inputs{Cluster: cluster, SnapshotPods: snapPods, ResourceDetection: snap.ResourceDetection})
+	defer host.Close()
+	runner, err := topology.NewRunner(ctx, topo, val, topology.Inputs{Plugins: host}, log)
 	if err != nil {
 		return nil, err
 	}
@@ -144,11 +151,11 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 		return nil, err
 	}
 
-	flow, err := topology.Flow(topo, val)
+	flow, err := topology.Flow(topo, val, runner.ProcessorNote)
 	if err != nil {
 		return nil, err
 	}
-	res := &Result{Log: log, Series: map[string][]unit.Metric{}, Problems: append(problems, val.Problems...), Flow: flow, pods: pods}
+	res := &Result{Log: log, Series: map[string][]unit.Metric{}, Problems: append(problems, val.Problems...), Flow: flow, pods: pods, Plugins: host.Used()}
 	for _, name := range topology.Names(topo.Backends) {
 		res.Flow.AddNode(topology.BackendFlowNode(name, topo.Backends[name].Type))
 		limits, err := mimir.Load(topo.Backends[name].Config)
@@ -294,5 +301,8 @@ func ReportWithFlow(ctx context.Context, s *Scenario) (*report.Report, flowgraph
 	}
 	rep := report.Build(s.Name, s.EvalTime, res.Log, reqs, res.pods)
 	rep.Problems = append(res.Problems, rep.Problems...)
+	for _, p := range res.Plugins {
+		rep.Otelcov.Plugins = append(rep.Otelcov.Plugins, version.Plugin{Distribution: p.Distribution, Version: p.Version, Reviewed: p.Reviewed, Modules: p.Modules})
+	}
 	return rep, res.Flow, nil
 }

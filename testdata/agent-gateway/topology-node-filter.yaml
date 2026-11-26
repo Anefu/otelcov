@@ -4,12 +4,16 @@ version: 1
 collectors:
   agent:
     config: collector/agent-node-filter.yaml
+    distribution: otelcol-contrib
+    version: 0.134.1
     sha256: ea31e7b2d283a1b9f9acd2f0fea06b6a0235641b30e57c07d8e8588a47d872cc
     tap: metrics/tap
     env:
       K8S_NODE_NAME: {fieldRef: spec.nodeName}
   gateway:
     config: collector/gateway.yaml
+    distribution: otelcol-contrib
+    version: 0.134.1
     sha256: 3c602d561092fa2cae242e8074e1370e36ef10c74745206a9e2554ca52d35ddb
 backends:
   mimir:

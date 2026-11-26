@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
 	"github.com/Anefu/otelcov/internal/lineage"
+	"github.com/Anefu/otelcov/internal/pluginhost"
 	"github.com/Anefu/otelcov/internal/unit"
 )
 
@@ -47,8 +48,8 @@ service:
 const topo = `
 version: 1
 collectors:
-  agent: {config: agent.yaml, tap: metrics/tap}
-  gateway: {config: gateway.yaml}
+  agent: {config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap}
+  gateway: {config: gateway.yaml, distribution: otelcol-contrib, version: 0.139.0}
 backends:
   mimir: {type: mimir-otlp, config: mimir.yaml}
 consumers:
@@ -131,14 +132,14 @@ func TestValidate(t *testing.T) {
 		{"tap pipeline missing", [][3]string{{"topology.yaml", "tap: metrics/tap", "tap: metrics/rec"}},
 			Fatal, []string{`tap pipeline "metrics/rec" doesn't exist`, "agent/exporters/file/tap: exporter isn't joined"}, -1},
 		{"feature gate conflict", [][3]string{
-			{"topology.yaml", "{config: agent.yaml, tap: metrics/tap}", "{config: agent.yaml, tap: metrics/tap, feature_gates: [some.gate]}"},
-			{"topology.yaml", "{config: gateway.yaml}", "{config: gateway.yaml, feature_gates: [-some.gate]}"}},
+			{"topology.yaml", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap}", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap, feature_gates: [some.gate]}"},
+			{"topology.yaml", "{config: gateway.yaml, distribution: otelcol-contrib, version: 0.139.0}", "{config: gateway.yaml, distribution: otelcol-contrib, version: 0.139.0, feature_gates: [-some.gate]}"}},
 			Fatal, []string{"feature gate some.gate is off here but agent:on"}, -1},
 		{"untapped receiver", [][3]string{
 			{"agent.yaml", "receivers:\n  otlp:", "receivers:\n  prometheus: {}\n  otlp:"},
 			{"agent.yaml", "metrics: {receivers: [otlp]", "metrics: {receivers: [otlp, prometheus]"}},
 			Warning, []string{"receiver prometheus feeds pipeline metrics but isn't tapped"}, -1},
-		{"hash changed", [][3]string{{"topology.yaml", "{config: gateway.yaml}", "{config: gateway.yaml, sha256: 0000}"}},
+		{"hash changed", [][3]string{{"topology.yaml", "{config: gateway.yaml, distribution: otelcol-contrib, version: 0.139.0}", "{config: gateway.yaml, distribution: otelcol-contrib, version: 0.139.0, sha256: 0000}"}},
 			Warning, []string{"gateway.yaml changed since the topology was written"}, -1},
 		{"unresolved env", [][3]string{{"agent.yaml", "gateway:4317", "${env:GATEWAY}"}},
 			Warning, []string{`endpoint "${env:GATEWAY}" has an unresolved env reference`}, -1},
@@ -167,7 +168,7 @@ func TestValidate(t *testing.T) {
 func TestEnvResolvesEndpoint(t *testing.T) {
 	f := fixture(t,
 		[3]string{"agent.yaml", "gateway:4317", "${env:GATEWAY}"},
-		[3]string{"topology.yaml", "{config: agent.yaml, tap: metrics/tap}", "{config: agent.yaml, tap: metrics/tap, env: {GATEWAY: \"gateway:4318\"}}"})
+		[3]string{"topology.yaml", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap}", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap, env: {GATEWAY: \"gateway:4318\"}}"})
 	v := Validate(f)
 	if w := problems(v, Warning); len(w) != 0 {
 		t.Errorf("env value given: want no warning, got %q", w)
@@ -196,7 +197,9 @@ func run(t *testing.T, f *File) (*Runner, *lineage.Log) {
 	log := lineage.NewLog()
 	in := []unit.Metric{item("s1")}
 	log.AddSignal(lineage.Signal{ID: "s1", Node: "source", Kind: "otlp_metric", Name: "m"})
-	r, err := NewRunner(f, v, Inputs{}, log)
+	host := pluginhost.New("", pluginhost.Inputs{})
+	defer host.Close()
+	r, err := NewRunner(context.Background(), f, v, Inputs{Plugins: host}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +288,7 @@ func TestSnapshotPipelines(t *testing.T) {
 		{"agent.yaml", "  file/tap: {path: /tmp/tap.jsonl}", "  file/tap: {path: /tmp/tap.jsonl}\n  file/detected: {path: /tmp/detected.jsonl}"},
 		{"agent.yaml", "    metrics/tap: {receivers: [otlp], exporters: [file/tap]}", "    metrics/tap: {receivers: [otlp], exporters: [file/tap]}\n    metrics/detected: {receivers: [otlp], processors: [batch], exporters: [file/detected]}"},
 	}
-	listed := append(withDetect, [3]string{"topology.yaml", "{config: agent.yaml, tap: metrics/tap}", "{config: agent.yaml, tap: metrics/tap, snapshot_pipelines: [metrics/detected]}"})
+	listed := append(withDetect, [3]string{"topology.yaml", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap}", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap, snapshot_pipelines: [metrics/detected]}"})
 
 	if got := problems(Validate(fixture(t, withDetect...)), Fatal); len(got) != 1 || !strings.Contains(got[0], "agent/exporters/file/detected: exporter isn't joined") {
 		t.Errorf("unlisted, the pipeline is modeled and its exporter unknown: %q", got)
@@ -304,8 +307,47 @@ func TestSnapshotPipelines(t *testing.T) {
 		}
 	}
 
-	missing := fixture(t, [3]string{"topology.yaml", "{config: agent.yaml, tap: metrics/tap}", "{config: agent.yaml, tap: metrics/tap, snapshot_pipelines: [metrics/nope]}"})
+	missing := fixture(t, [3]string{"topology.yaml", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap}", "{config: agent.yaml, distribution: otelcol-contrib, version: 0.139.0, tap: metrics/tap, snapshot_pipelines: [metrics/nope]}"})
 	if got := problems(Validate(missing), Fatal); len(got) != 1 || !strings.Contains(got[0], `snapshot pipeline "metrics/nope" doesn't exist`) {
 		t.Errorf("want missing snapshot pipeline fatal: %q", got)
+	}
+}
+
+// A collector without a plugin for its distribution and version gets a
+// problem, and its processors are unverified (decision 68).
+func TestRunWithoutPlugin(t *testing.T) {
+	const ours = "distribution: otelcol-contrib, version: 0.139.0, tap"
+	for name, tc := range map[string]struct {
+		edit [3]string
+		why  string
+	}{
+		"outside the reviewed range": {[3]string{"topology.yaml", ours, "distribution: otelcol-contrib, version: 0.140.0, tap"},
+			"no plugin was reviewed for otelcol-contrib 0.140.0; installed: otelcol-contrib 0.139.0 (reviewed for 0.134–0.139)"},
+		"no version": {[3]string{"topology.yaml", ours, "tap"},
+			"the topology doesn't say which distribution and version collector agent runs (`distribution`, `version`)"},
+		"another distribution": {[3]string{"topology.yaml", ours, "distribution: otelcol-k8s, version: 0.139.0, tap"},
+			"no plugin models distribution otelcol-k8s; installed: otelcol-contrib 0.139.0 (reviewed for 0.134–0.139)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, log := run(t, fixture(t, tc.edit))
+			var agent, gateway int
+			for _, e := range log.Events() {
+				if e.Action != lineage.Unverified {
+					continue
+				}
+				switch {
+				case strings.HasPrefix(e.Node, "agent/") && e.Reason == tc.why:
+					agent++
+				case strings.HasPrefix(e.Node, "gateway/"):
+					gateway++
+				}
+			}
+			if agent == 0 || gateway != 0 {
+				t.Errorf("want the agent's processors unverified (%d) and the gateway's not (%d): %+v", agent, gateway, log.Events())
+			}
+			if got := problems(r.v, Unverified); len(got) != 1 || got[0] != "agent: "+tc.why+", so its processors are unverified" {
+				t.Errorf("problems: %q", got)
+			}
+		})
 	}
 }

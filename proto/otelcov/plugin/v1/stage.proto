@@ -1,0 +1,196 @@
+// The stage plugin protocol (decisions 67 to 69).
+//
+// A stage plugin models the stages of one distribution at one version: for a
+// collector distribution such as otelcol-contrib 0.139, its processors. The
+// otelcov core runs the topology graph, follows lineage and reaches verdicts;
+// it starts the plugin as a subprocess (hashicorp/go-plugin), calls Init once
+// per run, Configure once per stage instance, then Apply with batches of
+// units.
+//
+// Telemetry crosses as OTLP protobuf, one unit per message. Lineage values,
+// details and resources cross as JSON, exactly as they appear in reports.
+syntax = "proto3";
+
+package otelcov.plugin.v1;
+
+option go_package = "github.com/Anefu/otelcov/pkg/plugin/pluginv1;pluginv1";
+
+service StagePlugin {
+  // Describe says what the plugin models.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  // Init prepares a run: feature gates, and the inventory and snapshot
+  // metadata stages may look things up in.
+  rpc Init(InitRequest) returns (InitResponse);
+  // Configure creates a stage instance from a component's config.
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+  // Apply runs a stage instance on a batch of units.
+  rpc Apply(ApplyRequest) returns (ApplyResponse);
+  // Close releases stage instances.
+  rpc Close(CloseRequest) returns (CloseResponse);
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  // The distribution modeled, e.g. "otelcol-contrib".
+  string distribution = 1;
+  // The version the plugin is built against, e.g. "0.139.0".
+  string version = 2;
+  // The deployed versions the plugin's behavior has been reviewed against
+  // (decision 68). Outside the range, paths through its stages are
+  // unverified.
+  VersionRange reviewed = 3;
+  // The component types the plugin models.
+  repeated Component components = 4;
+  // Versions of upstream modules the plugin links, e.g. pdata.
+  map<string, string> modules = 5;
+}
+
+// VersionRange bounds versions by major.minor, inclusive: min "0.134" and max
+// "0.139" take any patch release from 0.134.0 to 0.139.x.
+message VersionRange {
+  string min = 1;
+  string max = 2;
+}
+
+enum Fidelity {
+  FIDELITY_UNSPECIFIED = 0;
+  // The upstream component's own code.
+  FIDELITY_REAL = 1;
+  // otelcov's own model, held to upstream's tests (conformance).
+  FIDELITY_REIMPLEMENTATION = 2;
+  FIDELITY_APPROXIMATION = 3;
+  FIDELITY_UNMODELLED = 4;
+}
+
+message Component {
+  // "processor".
+  string kind = 1;
+  // The component type, e.g. "transform".
+  string type = 2;
+  Fidelity fidelity = 3;
+  // For reimplementations: whether the ported upstream test cases pass at
+  // the version the plugin is built against (decision 69).
+  bool conformance = 4;
+  // A short note for flow graphs, e.g. "passes data through".
+  string note = 5;
+}
+
+message InitRequest {
+  // Feature gates as passed with --feature-gates ("-" disables), for every
+  // collector the plugin models in this run.
+  repeated string feature_gates = 1;
+  // The config under test's Kubernetes objects (pods, namespaces, nodes), as
+  // a JSON List.
+  bytes cluster = 2;
+  // The pods running at recording time, as a JSON List.
+  bytes snapshot_pods = 3;
+  // What each resourcedetection processor detected at recording time, by
+  // collector then processor ID, as JSON (snapshot metadata).
+  bytes resource_detection = 4;
+}
+
+message InitResponse {}
+
+// Instance is the collector instance a stage runs in.
+message Instance {
+  // The collector's name in the topology.
+  string collector = 1;
+  // The instance's Kubernetes node; "" when unknown.
+  string node = 2;
+  // The collector's environment from the topology.
+  map<string, EnvVar> env = 3;
+}
+
+message EnvVar {
+  string value = 1;
+  // "spec.nodeName": the instance's node.
+  string field_ref = 2;
+}
+
+message ConfigureRequest {
+  // "processor".
+  string kind = 1;
+  // The component ID in the collector config, e.g. "transform/team".
+  string component_id = 2;
+  // The stage's node name in lineage, e.g. "gateway/transform/team".
+  string node_name = 3;
+  // The component's config section, as JSON.
+  bytes config = 4;
+  Instance instance = 5;
+}
+
+message ConfigureResponse {
+  // Refers to the stage instance in Apply and Close.
+  string handle = 1;
+  // Set when the stage can't be modeled (an invalid or unmodeled setting, an
+  // unknown type): the core passes data through and marks it unverified with
+  // this reason.
+  string unsupported = 2;
+  // The stage passes data through unchanged (e.g. batch); the core doesn't
+  // call Apply.
+  bool pass_through = 3;
+  Fidelity fidelity = 4;
+}
+
+// Unit is one processing unit: an item or a metric group (AGENTS.md,
+// Processing units).
+message Unit {
+  string id = 1;
+  repeated string from = 2;
+  // One OTLP MetricsData, protobuf-encoded.
+  bytes otlp = 3;
+}
+
+message ApplyRequest {
+  string handle = 1;
+  repeated Unit units = 2;
+  // Items the stage creates are numbered from this ("c<next_id>"), so IDs
+  // stay one sequence across the run.
+  int64 next_id = 3;
+}
+
+message ApplyResponse {
+  repeated Unit units = 1;
+  repeated Event events = 2;
+  // Signals for output units with new IDs.
+  repeated Signal signals = 3;
+  // How many IDs from next_id the stage used.
+  int64 ids_used = 4;
+}
+
+// Event is a lineage event (AGENTS.md, Lineage and reports).
+message Event {
+  string node = 1;
+  string signal = 2;
+  string attribute = 3;
+  string action = 4;
+  // JSON; empty when there's no value.
+  bytes value = 5;
+  bool simulated = 6;
+  string reason = 7;
+  repeated string from = 8;
+  // JSON object; empty when there's no detail.
+  bytes detail = 9;
+}
+
+message Signal {
+  string id = 1;
+  string node = 2;
+  string kind = 3;
+  string name = 4;
+  string origin = 5;
+  repeated string from = 6;
+  // JSON object.
+  bytes resource = 7;
+  map<string, string> labels = 8;
+  // JSON; empty when there's no value.
+  bytes value = 9;
+}
+
+message CloseRequest {
+  // The stage instances to release; all of them when empty.
+  repeated string handles = 1;
+}
+
+message CloseResponse {}
