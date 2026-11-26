@@ -76,6 +76,12 @@ type Backend struct {
 	// Version is the release the backend runs, e.g. Mimir 3.2.3. Whether
 	// otelcov's model of it is tested depends on it (decision 72).
 	Version string `json:"version,omitempty"`
+	// RuntimeConfig is the backend's runtime configuration file (Mimir's
+	// runtime_config.file), as rendered, and Tenant the tenant the stack
+	// writes as: the tenant's overrides there apply (decision 74).
+	RuntimeConfig       string `json:"runtime_config,omitempty"`
+	RuntimeConfigSHA256 string `json:"runtime_config_sha256,omitempty"`
+	Tenant              string `json:"tenant,omitempty"`
 }
 
 // Consumer reads from a backend or another consumer.
@@ -150,6 +156,7 @@ func Load(path string) (*File, error) {
 	}
 	for k, b := range f.Backends {
 		b.Config = abs(b.Config)
+		b.RuntimeConfig = abs(b.RuntimeConfig)
 		f.Backends[k] = b
 	}
 	for k, c := range f.Consumers {

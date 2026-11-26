@@ -2,6 +2,8 @@ package mimir
 
 import (
 	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -43,6 +45,38 @@ var limitSets = []limitSet{
 		"otel_label_name_preserve_multiple_underscores": false,
 		"promote_otel_resource_attributes":              "a__b,__double",
 	}, needs: []string{"-distributor.otel-label-name-preserve-underscores"}},
+	// Small label limits, for the label-limits input.
+	{name: "label-limits", limits: map[string]any{
+		"max_label_names_per_series":      12,
+		"max_label_names_per_info_series": 15,
+		"max_label_name_length":           20,
+		"max_label_value_length":          40,
+	}},
+	// Limits otelcov ignores or assumes met (decision 74), away from their
+	// defaults: what's stored must not change.
+	{name: "ignored-and-assumed", limits: map[string]any{
+		"ingestion_rate":                             50000,
+		"ingestion_burst_size":                       500000,
+		"request_rate":                               100,
+		"max_global_series_per_user":                 1000000,
+		"max_global_series_per_metric":               100000,
+		"creation_grace_period":                      "30m",
+		"past_grace_period":                          "2h",
+		"out_of_order_time_window":                   "10m",
+		"max_query_lookback":                         "720h",
+		"ruler_max_rules_per_rule_group":             50,
+		"max_global_exemplars_per_user":              100,
+		"max_global_metadata_per_metric":             1,
+		"max_metadata_length":                        10,
+		"separate_metrics_group_label":               "group",
+		"active_series_custom_trackers":              map[string]any{"api": `{job="shop/api"}`},
+		"compactor_blocks_retention_period":          "720h",
+		"cardinality_analysis_enabled":               true,
+		"ha_cluster_label":                           "replica_cluster",
+		"out_of_order_blocks_external_label_enabled": true,
+		"query_ingesters_within":                     "24h",
+		"otel_metric_suffixes_enabled":               true,
+	}},
 }
 
 // input is one generated input: the OTLP requests sent, in order.
@@ -287,6 +321,40 @@ var inputs = []input{
 			return dp.Timestamp() == at(base, 0) || dp.Timestamp() == at(base, 2)
 		})
 		return []pmetric.Metrics{first, second}
+	}},
+	{name: "label-limits", requests: func(base time.Time) []pmetric.Metrics {
+		// Series at and over the label-limits set's limits (12 labels, 15
+		// for info series, names of 20 and values of 40): each has
+		// __name__, job and instance, plus the attributes it says.
+		md := pmetric.NewMetrics()
+		sm := resource(md, map[string]string{"service.name": "lim", "service.instance.id": "i"})
+		withAttrs := func(name string, n int) {
+			dp := gauge(sm, name, "", base, 1).At(0)
+			for i := 1; i <= n; i++ {
+				dp.Attributes().PutStr("a"+strconv.Itoa(i), "v")
+			}
+		}
+		withAttrs("eleven", 8)
+		withAttrs("twelve", 9)
+		withAttrs("thirteen", 10)
+		withAttrs("build_info", 10)
+		withAttrs("big_info", 13)
+		withAttrs("info_suffix_only", 10)
+		gauge(sm, "name20", "", base, 1).At(0).Attributes().PutStr(strings.Repeat("n", 20), "v")
+		gauge(sm, "name21", "", base, 1).At(0).Attributes().PutStr(strings.Repeat("n", 21), "v")
+		gauge(sm, "value40", "", base, 1).At(0).Attributes().PutStr("v", strings.Repeat("x", 40))
+		gauge(sm, "value41", "", base, 1).At(0).Attributes().PutStr("v", strings.Repeat("x", 41))
+		// 25 characters, 50 bytes.
+		gauge(sm, "value_runes", "", base, 1).At(0).Attributes().PutStr("v", strings.Repeat("é", 25))
+		// target_info with 15 and 16 labels.
+		for _, extra := range []int{12, 13} {
+			attrs := map[string]string{"service.name": "wide" + strconv.Itoa(extra), "service.instance.id": "w"}
+			for i := 1; i <= extra; i++ {
+				attrs["r"+strconv.Itoa(i)] = "v"
+			}
+			gauge(resource(md, attrs), "on.wide", "", base, 1)
+		}
+		return []pmetric.Metrics{md}
 	}},
 	{name: "special-values", requests: func(base time.Time) []pmetric.Metrics {
 		md := pmetric.NewMetrics()

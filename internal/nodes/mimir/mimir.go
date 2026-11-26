@@ -8,8 +8,10 @@ package mimir
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,7 +91,8 @@ func minor(v string) ([2]int, bool) {
 
 func less(a, b [2]int) bool { return a[0] < b[0] || a[0] == b[0] && a[1] < b[1] }
 
-// Limits are the Mimir per-tenant limits that shape OTLP ingestion.
+// Limits are the Mimir per-tenant limits otelcov models, for one tenant,
+// with what Load found about the others (decision 74).
 type Limits struct {
 	// PromoteOTelResourceAttributes is a comma-separated list of resource
 	// attributes that become labels.
@@ -105,10 +108,39 @@ type Limits struct {
 	// underscores in label names. Mimir's default is true.
 	OTelLabelNamePreserveMultipleUnderscores *bool `json:"otel_label_name_preserve_multiple_underscores"`
 
-	// RuntimeConfig is the config's runtime_config.file, if set: per-tenant
-	// overrides there can change these limits, and otelcov doesn't read them
-	// yet.
-	RuntimeConfig string `json:"-"`
+	// Label limits: Mimir refuses series with more labels, or longer names
+	// or values, than these (defaults 30, 80 for info series, 1024, 2048).
+	// With the "truncate" or "drop" strategy, Mimir hashes long values
+	// instead, which otelcov doesn't model.
+	MaxLabelNamesPerSeries            *int   `json:"max_label_names_per_series"`
+	MaxLabelNamesPerInfoSeries        *int   `json:"max_label_names_per_info_series"`
+	MaxLabelNameLength                *int   `json:"max_label_name_length"`
+	MaxLabelValueLength               *int   `json:"max_label_value_length"`
+	LabelValueLengthOverLimitStrategy string `json:"label_value_length_over_limit_strategy"`
+
+	// Tenant is the tenant these limits are for, "" when unknown.
+	Tenant string `json:"-"`
+	// Unverified says why answers through the backend are unverified:
+	// limits otelcov doesn't model, set to other than Mimir's default;
+	// limits it doesn't know; runtime config it can't apply.
+	Unverified []string `json:"-"`
+	// Assumed lists the load, timing and size limits set explicitly, as
+	// name=value; answers assume the tenant stays within them anyway.
+	Assumed []string `json:"-"`
+}
+
+// Source says where a Mimir backend's limits come from (decision 74).
+type Source struct {
+	// Config is Mimir's configuration file: its limits section holds every
+	// tenant's defaults.
+	Config string
+	// RuntimeConfig is the runtime configuration file Mimir reads
+	// (runtime_config.file), as rendered; "" when the topology doesn't give
+	// it.
+	RuntimeConfig string
+	// Tenant is the tenant the stack writes as; "" means Mimir's no-auth
+	// tenant when multitenancy is off, and unknown otherwise.
+	Tenant string
 }
 
 // identifying resource attributes become job and instance, not target_info labels.
@@ -122,29 +154,164 @@ type Node struct {
 	settings prw.Settings
 }
 
-// Load reads the limits section of a Mimir config file. Other sections
-// (storage, rings, ruler, ...) don't affect OTLP translation and are ignored;
-// a limit otelcov doesn't model is an error, since it might.
-func Load(path string) (Limits, error) {
-	data, err := os.ReadFile(path)
+// Load reads a Mimir backend's limits for the tenant the stack writes as:
+// the config's limits section, with the tenant's overrides from the runtime
+// config over it, as Mimir applies them. Every limit is classified
+// (limits.go): modelled ones are read, ignored ones skipped, assumed ones
+// listed in Assumed, and ones otelcov doesn't model or know, unless set to
+// Mimir's default, make answers unverified (Unverified). Other sections of
+// the config (storage, rings, the ruler) don't affect what's stored and are
+// ignored.
+func Load(src Source) (Limits, error) {
+	data, err := os.ReadFile(src.Config)
 	if err != nil {
 		return Limits{}, err
 	}
 	var f struct {
 		Limits        map[string]any `json:"limits"`
+		Multitenancy  *bool          `json:"multitenancy_enabled"`
+		NoAuthTenant  string         `json:"no_auth_tenant"`
 		RuntimeConfig struct {
 			File string `json:"file"`
 		} `json:"runtime_config"`
 	}
 	if err := yaml.Unmarshal(data, &f); err != nil {
-		return Limits{}, fmt.Errorf("%s: %w", path, err)
+		return Limits{}, fmt.Errorf("%s: %w", src.Config, err)
 	}
 	var l Limits
-	if err := collector.Decode(f.Limits, &l); err != nil {
-		return Limits{}, fmt.Errorf("%s: unsupported Mimir limits: %w", path, err)
+	raw := map[string]any{}
+	for k, v := range f.Limits {
+		raw[k] = v
 	}
-	l.RuntimeConfig = f.RuntimeConfig.File
+
+	// Without multitenancy, Mimir stores everything as its no-auth tenant.
+	l.Tenant = src.Tenant
+	if f.Multitenancy != nil && !*f.Multitenancy {
+		l.Tenant = "anonymous"
+		if f.NoAuthTenant != "" {
+			l.Tenant = f.NoAuthTenant
+		}
+	}
+	switch {
+	case src.RuntimeConfig != "":
+		if err := l.applyRuntime(src.RuntimeConfig, raw); err != nil {
+			return Limits{}, err
+		}
+	case f.RuntimeConfig.File != "":
+		l.Unverified = append(l.Unverified, "Mimir's runtime config ("+f.RuntimeConfig.File+") can override limits per tenant, and the topology doesn't give it (runtime_config)")
+	}
+
+	modelled := map[string]any{}
+	for _, k := range sortedKeys(raw) {
+		v := raw[k]
+		u, unmodelled := unmodelledLimits[k]
+		switch {
+		case modelledLimits[k]:
+			modelled[k] = v
+		case ignoredLimits[k]:
+		case assumedLimits[k]:
+			l.Assumed = append(l.Assumed, k+"="+text(v))
+		case unmodelled && isDefault(v, u.def):
+		case unmodelled:
+			l.Unverified = append(l.Unverified, "Mimir limit "+k+" is "+text(v)+", which otelcov doesn't model: it "+u.what)
+		default:
+			l.Unverified = append(l.Unverified, "Mimir limit "+k+" isn't one otelcov knows (it classified Mimir "+TestedMin+"–"+TestedMax+"'s)")
+		}
+	}
+	if err := collector.Decode(modelled, &l); err != nil {
+		return Limits{}, fmt.Errorf("%s: limits: %w", src.Config, err)
+	}
 	return l, nil
+}
+
+// applyRuntime puts the tenant's overrides from a runtime config over raw.
+func (l *Limits) applyRuntime(path string, raw map[string]any) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var rt map[string]any
+	if err := yaml.Unmarshal(data, &rt); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	for _, k := range sortedKeys(rt) {
+		switch k {
+		case "overrides", "multi_kv_config":
+		case "ingester_limits", "distributor_limits":
+			// Instance limits: load, like the assumed per-tenant ones.
+			if rt[k] != nil {
+				l.Assumed = append(l.Assumed, k+"="+text(rt[k]))
+			}
+		default:
+			l.Unverified = append(l.Unverified, "Mimir's runtime config has a section "+k+", which otelcov doesn't know")
+		}
+	}
+	overrides, _ := rt["overrides"].(map[string]any)
+	if l.Tenant == "" {
+		if len(overrides) > 0 {
+			l.Unverified = append(l.Unverified, "Mimir's runtime config overrides limits for tenants "+strings.Join(sortedKeys(overrides), ", ")+
+				", and the topology doesn't say which tenant the stack writes as (tenant)")
+		}
+		return nil
+	}
+	own, _ := overrides[l.Tenant].(map[string]any)
+	for k, v := range own {
+		raw[k] = v
+	}
+	return nil
+}
+
+// isDefault reports whether a limit's value is Mimir's default; an empty list
+// or map is the default nil.
+func isDefault(v, def any) bool {
+	if def == nil {
+		switch v := v.(type) {
+		case nil:
+			return true
+		case []any:
+			return len(v) == 0
+		case map[string]any:
+			return len(v) == 0
+		case string:
+			return v == ""
+		}
+		return false
+	}
+	return reflect.DeepEqual(v, def)
+}
+
+// text formats a limit's value for messages.
+func text(v any) string {
+	if s, ok := v.(string); ok {
+		return strconv.Quote(s)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
+func sortedKeys[T any](m map[string]T) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Assumption is what answers through a Mimir backend assume, for reports.
+func (l Limits) Assumption() string {
+	who := "the tenant"
+	if l.Tenant != "" {
+		who = "tenant " + strconv.Quote(l.Tenant)
+	}
+	msg := "answers assume " + who + " stays within Mimir's rate, series, sample-time, query and rule limits, which a replay can't check"
+	if len(l.Assumed) > 0 {
+		msg += " (set here: " + strings.Join(l.Assumed, ", ") + ")"
+	}
+	return msg
 }
 
 // New builds the node from Mimir limits. backend is the backend's name in the
@@ -254,10 +421,9 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 		byKey   = map[string]*converted{}
 	)
 	for _, it := range in {
-		if n.limits.RuntimeConfig != "" {
+		if len(n.limits.Unverified) > 0 {
 			out.Events = append(out.Events, lineage.Event{
-				Node: n.name, Signal: it.ID, Action: lineage.Unverified,
-				Reason: "Mimir's runtime config (" + n.limits.RuntimeConfig + ") can override these limits per tenant, and otelcov doesn't read it yet",
+				Node: n.name, Signal: it.ID, Action: lineage.Unverified, Reason: strings.Join(n.limits.Unverified, "; "),
 			})
 		}
 		app := &appender{byKey: map[string]*appended{}}
@@ -301,9 +467,22 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 		}
 	}
 
-	// Data series first, then target_info, each in input order.
+	// Data series first, then target_info, each in input order. Mimir
+	// refuses series over its label limits.
 	next := 0
 	for _, cv := range append(data, targets...) {
+		refused, unverified := n.checkLabels(cv.lset)
+		for _, from := range cv.from {
+			if refused != "" {
+				out.Events = append(out.Events, lineage.Event{Node: n.name, Signal: from, Action: lineage.Dropped, Reason: refused})
+			}
+			if unverified != "" {
+				out.Events = append(out.Events, lineage.Event{Node: n.name, Signal: from, Action: lineage.Unverified, Reason: unverified})
+			}
+		}
+		if refused != "" {
+			continue
+		}
 		next++
 		id := lineage.SignalID("p" + strconv.Itoa(next))
 		data := unit.NewSeries(cv.lset, cv.samples...)
@@ -371,6 +550,61 @@ func (n *Node) dataEvents(id lineage.SignalID, cv *converted) []lineage.Event {
 	}
 	return events
 }
+
+// Mimir's defaults for the label limits.
+const (
+	defaultMaxLabelNames        = 30
+	defaultMaxLabelNamesForInfo = 80
+	defaultMaxLabelNameLength   = 1024
+	defaultMaxLabelValueLength  = 2048
+)
+
+func orDefault(v *int, def int) int {
+	if v == nil {
+		return def
+	}
+	return *v
+}
+
+// checkLabels applies Mimir's label limits to a series: why Mimir refuses
+// it, or why what it stores is unverified (a long value it hashes).
+func (n *Node) checkLabels(lset labels.Labels) (refused, unverified string) {
+	name := lset.Get(labels.MetricName)
+	max, limit := orDefault(n.limits.MaxLabelNamesPerSeries, defaultMaxLabelNames), "max_label_names_per_series"
+	if info := orDefault(n.limits.MaxLabelNamesPerInfoSeries, defaultMaxLabelNamesForInfo); isInfo(name) && info > max {
+		max, limit = info, "max_label_names_per_info_series"
+	}
+	if c := labelCount(lset); c > max {
+		return fmt.Sprintf("Mimir refuses series %s: it has %d labels, more than %s (%d)", name, c, limit, max), ""
+	}
+	maxName := orDefault(n.limits.MaxLabelNameLength, defaultMaxLabelNameLength)
+	maxValue := orDefault(n.limits.MaxLabelValueLength, defaultMaxLabelValueLength)
+	lset.Range(func(l labels.Label) {
+		switch {
+		case refused != "":
+		case labelLength(l.Name) > maxName:
+			refused = fmt.Sprintf("Mimir refuses series %s: label name %s is longer than max_label_name_length (%d)", name, l.Name, maxName)
+		case labelLength(l.Value) <= maxValue:
+		case n.limits.LabelValueLengthOverLimitStrategy == "" || n.limits.LabelValueLengthOverLimitStrategy == "error":
+			refused = fmt.Sprintf("Mimir refuses series %s: label %s's value is longer than max_label_value_length (%d)", name, l.Name, maxValue)
+		default:
+			unverified = fmt.Sprintf("Mimir replaces label %s's value on series %s with a hash, since it's longer than max_label_value_length (%d) (label_value_length_over_limit_strategy %s); otelcov doesn't model the hash",
+				l.Name, name, maxValue, n.limits.LabelValueLengthOverLimitStrategy)
+		}
+	})
+	if refused != "" {
+		unverified = ""
+	}
+	return refused, unverified
+}
+
+// How Mimir applies the label limits, as the conformance suite's
+// label-limits cases show at 3.0 and 3.2: an info series is one whose name
+// ends in _info, __name__ counts as a label, and lengths are in bytes.
+
+func isInfo(name string) bool           { return strings.HasSuffix(name, "_info") }
+func labelCount(lset labels.Labels) int { return lset.Len() }
+func labelLength(s string) int          { return len(s) }
 
 // latest is a series' latest value for lineage: a float, or a native
 // histogram in Prometheus's text form.

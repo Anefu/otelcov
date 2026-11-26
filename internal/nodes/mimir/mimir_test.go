@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -102,8 +103,8 @@ func writeConfig(t *testing.T, content string) string {
 }
 
 func TestLoadFullConfig(t *testing.T) {
-	// A real Mimir config: only limits matter for translation.
-	l, err := Load(writeConfig(t, `
+	// A real Mimir config: other sections don't matter for what's stored.
+	l, err := Load(Source{Config: writeConfig(t, `
 multitenancy_enabled: false
 server: {http_listen_port: 8080}
 blocks_storage: {backend: filesystem}
@@ -111,36 +112,165 @@ limits:
   promote_otel_resource_attributes: "k8s.pod.name,team"
   otel_metric_suffixes_enabled: true
   otel_label_name_underscore_sanitization: false
-`))
+  max_label_names_per_series: 40
+`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.PromoteOTelResourceAttributes != "k8s.pod.name,team" || !l.OTelMetricSuffixesEnabled || l.RuntimeConfig != "" ||
-		l.OTelLabelNameUnderscoreSanitization == nil || *l.OTelLabelNameUnderscoreSanitization || l.OTelLabelNamePreserveMultipleUnderscores != nil {
+	if l.PromoteOTelResourceAttributes != "k8s.pod.name,team" || !l.OTelMetricSuffixesEnabled || len(l.Unverified) > 0 ||
+		l.OTelLabelNameUnderscoreSanitization == nil || *l.OTelLabelNameUnderscoreSanitization || l.OTelLabelNamePreserveMultipleUnderscores != nil ||
+		l.MaxLabelNamesPerSeries == nil || *l.MaxLabelNamesPerSeries != 40 || l.Tenant != "anonymous" {
 		t.Errorf("limits: %+v", l)
-	}
-
-	// A limit otelcov doesn't model might change translation: refuse.
-	if _, err := Load(writeConfig(t, "limits:\n  otel_translation_strategy: NoTranslation\n")); err == nil || !strings.Contains(err.Error(), "otel_translation_strategy") {
-		t.Errorf("want an error naming the unmodeled limit, got %v", err)
 	}
 }
 
-func TestRuntimeConfigIsUnverified(t *testing.T) {
-	l, err := Load(writeConfig(t, "runtime_config: {file: /etc/mimir/runtime.yaml}\nlimits: {otel_metric_suffixes_enabled: true}\n"))
+// Limits are ignored, assumed met or make answers unverified by class
+// (decision 74).
+func TestLimitClasses(t *testing.T) {
+	l, err := Load(Source{Config: writeConfig(t, `
+limits:
+  otel_metric_suffixes_enabled: true
+  compactor_blocks_retention_period: 30d   # ignored
+  ingestion_rate: 50000                    # assumed
+  max_global_series_per_user: 1000000      # assumed
+  drop_labels: []                          # unmodelled, but Mimir's default
+  native_histograms_ingestion_enabled: true
+  otel_translation_strategy: NoTranslation # unmodelled
+  accept_ha_samples: true                  # unmodelled
+  limit_from_the_future: 1                 # unknown
+`)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := strings.Join(l.Assumed, ", "); got != "ingestion_rate=50000, max_global_series_per_user=1000000" {
+		t.Errorf("assumed: %s", got)
+	}
+	want := []string{
+		"Mimir limit accept_ha_samples is true, which otelcov doesn't model: it deduplicates HA replicas and removes their replica label",
+		"Mimir limit limit_from_the_future isn't one otelcov knows (it classified Mimir 3.0–3.2's)",
+		`Mimir limit otel_translation_strategy is "NoTranslation", which otelcov doesn't model: it changes how OTLP metric and label names are translated`,
+	}
+	if strings.Join(l.Unverified, "\n") != strings.Join(want, "\n") {
+		t.Errorf("unverified:\n%s", strings.Join(l.Unverified, "\n"))
+	}
+	if !strings.Contains(l.Assumption(), "answers assume the tenant stays within") || !strings.Contains(l.Assumption(), "set here: ingestion_rate=50000") {
+		t.Errorf("assumption: %s", l.Assumption())
+	}
+
+	// Every answer through the backend is unverified, with the reasons.
 	out, err := New("mimir", l).ProcessMetrics(context.Background(), []unit.Metric{item("s1", pmetric.AggregationTemporalityCumulative, "m")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var unverified bool
+	var reason string
 	for _, e := range out.Events {
-		unverified = unverified || (e.Signal == "s1" && e.Action == lineage.Unverified && strings.Contains(e.Reason, "/etc/mimir/runtime.yaml"))
+		if e.Signal == "s1" && e.Action == lineage.Unverified && e.Attribute == "" {
+			reason = e.Reason
+		}
 	}
-	if !unverified {
-		t.Errorf("want s1 unverified because of the runtime config: %+v", out.Events)
+	if !strings.Contains(reason, "accept_ha_samples") || !strings.Contains(reason, "limit_from_the_future") {
+		t.Errorf("unverified reason: %q", reason)
+	}
+}
+
+// The tenant's runtime overrides apply over the config's limits.
+func TestRuntimeConfig(t *testing.T) {
+	config := writeConfig(t, "runtime_config: {file: /etc/mimir/runtime.yaml}\nlimits: {otel_metric_suffixes_enabled: true, promote_otel_resource_attributes: k8s.pod.name}\n")
+	runtime := filepath.Join(t.TempDir(), "runtime.yaml")
+	if err := os.WriteFile(runtime, []byte(`
+overrides:
+  team-a:
+    promote_otel_resource_attributes: "k8s.pod.name,team"
+    ingestion_rate: 100000
+  team-b:
+    otel_metric_suffixes_enabled: false
+ingester_limits: {max_series: 5000000}
+multi_kv_config: {primary: consul}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := Load(Source{Config: config, RuntimeConfig: runtime, Tenant: "team-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.PromoteOTelResourceAttributes != "k8s.pod.name,team" || !l.OTelMetricSuffixesEnabled || len(l.Unverified) > 0 ||
+		strings.Join(l.Assumed, ", ") != `ingester_limits={"max_series":5000000}, ingestion_rate=100000` {
+		t.Errorf("team-a: %+v", l)
+	}
+	if l, _ := Load(Source{Config: config, RuntimeConfig: runtime, Tenant: "team-b"}); l.OTelMetricSuffixesEnabled || l.PromoteOTelResourceAttributes != "k8s.pod.name" {
+		t.Errorf("team-b: %+v", l)
+	}
+	// A tenant without overrides gets the config's limits.
+	if l, _ := Load(Source{Config: config, RuntimeConfig: runtime, Tenant: "team-c"}); !l.OTelMetricSuffixesEnabled || len(l.Unverified) > 0 {
+		t.Errorf("team-c: %+v", l)
+	}
+	// Which overrides apply depends on the tenant.
+	if l, _ := Load(Source{Config: config, RuntimeConfig: runtime}); len(l.Unverified) != 1 || !strings.Contains(l.Unverified[0], "tenants team-a, team-b, and the topology doesn't say which") {
+		t.Errorf("no tenant: %q", l.Unverified)
+	}
+	// Mimir reads a runtime config the topology doesn't give.
+	if l, _ := Load(Source{Config: config}); len(l.Unverified) != 1 || !strings.Contains(l.Unverified[0], "/etc/mimir/runtime.yaml") {
+		t.Errorf("runtime config not given: %q", l.Unverified)
+	}
+	// Without multitenancy, everything is the no-auth tenant's.
+	single := writeConfig(t, "multitenancy_enabled: false\nno_auth_tenant: team-b\n")
+	if l, _ := Load(Source{Config: single, RuntimeConfig: runtime, Tenant: "team-a"}); l.Tenant != "team-b" || l.OTelMetricSuffixesEnabled {
+		t.Errorf("no multitenancy: %+v", l)
+	}
+}
+
+// Mimir refuses series over its label limits (defaults 30 labels, 80 for
+// info series), and hashes long values with the truncate strategy.
+func TestLabelLimits(t *testing.T) {
+	series := func(name string, attrs int, value string) unit.Metric {
+		md := pmetric.NewMetrics()
+		rm := md.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("service.name", "api")
+		m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+		m.SetName(name)
+		dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
+		dp.SetTimestamp(1_700_000_000_000_000_000)
+		for i := 0; i < attrs; i++ {
+			dp.Attributes().PutStr("a"+strconv.Itoa(i), "v")
+		}
+		if value != "" {
+			dp.Attributes().PutStr("long", value)
+		}
+		return unit.Metric{ID: lineage.SignalID(name), Data: md}
+	}
+	in := []unit.Metric{
+		series("ok", 28, ""),         // 28 + __name__ + job
+		series("over", 29, ""),       // 31
+		series("build_info", 29, ""), // an info series: up to 80
+		series("long_value", 0, strings.Repeat("x", 2049)),
+	}
+	kept := func(l Limits) (map[string]bool, map[string]string) {
+		out, err := New("mimir", l).ProcessMetrics(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := map[string]bool{}
+		for _, it := range out.Items {
+			names[unit.SeriesLabels(it.Data).Get("__name__")] = true
+		}
+		events := map[string]string{}
+		for _, e := range out.Events {
+			if e.Action == lineage.Dropped || e.Action == lineage.Unverified {
+				events[string(e.Signal)] = string(e.Action) + ": " + e.Reason
+			}
+		}
+		return names, events
+	}
+	names, events := kept(Limits{})
+	if !names["ok"] || names["over"] || !names["build_info"] || names["long_value"] ||
+		events["over"] != "dropped: Mimir refuses series over: it has 31 labels, more than max_label_names_per_series (30)" ||
+		events["long_value"] != "dropped: Mimir refuses series long_value: label long's value is longer than max_label_value_length (2048)" {
+		t.Errorf("kept %v, events %q", names, events)
+	}
+	names, events = kept(Limits{LabelValueLengthOverLimitStrategy: "truncate"})
+	if !names["long_value"] || !strings.HasPrefix(events["long_value"], "unverified: Mimir replaces label long's value") {
+		t.Errorf("truncate: kept %v, events %q", names, events)
 	}
 }
 

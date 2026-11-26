@@ -158,10 +158,12 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 	res := &Result{Log: log, Series: map[string][]unit.Metric{}, Problems: append(problems, val.Problems...), Flow: flow, pods: pods, Plugins: host.Used()}
 	for _, name := range topology.Names(topo.Backends) {
 		res.Flow.AddNode(topology.BackendFlowNode(name, topo.Backends[name].Type))
-		limits, err := mimir.Load(topo.Backends[name].Config)
+		b := topo.Backends[name]
+		limits, err := mimir.Load(mimir.Source{Config: b.Config, RuntimeConfig: b.RuntimeConfig, Tenant: b.Tenant})
 		if err != nil {
 			return nil, fmt.Errorf("backend %s: %w", name, err)
 		}
+		res.Problems = append(res.Problems, topology.Problem{Severity: topology.Warning, Where: name, Message: limits.Assumption()})
 		backend := mimir.New(name, limits)
 		log.SetStage(backend.Name(), mimir.Fidelity(topo.Backends[name].Version))
 		series, err := graph.Process(ctx, []graph.MetricsNode{backend}, runner.Delivered[name], log)

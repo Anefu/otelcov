@@ -27,7 +27,6 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"sigs.k8s.io/yaml"
 
-	"github.com/Anefu/otelcov/internal/collector"
 	"github.com/Anefu/otelcov/internal/lineage"
 	"github.com/Anefu/otelcov/internal/unit"
 )
@@ -84,7 +83,7 @@ func TestConformance(t *testing.T) {
 	for _, r := range runs {
 		t.Run(r.in.name+"/"+r.set.name, func(t *testing.T) {
 			got := m.stored(t, r.tenant, base)
-			want := model(t, r.set.limits, r.in.requests(base))
+			want := model(t, m.source(r.tenant), r.in.requests(base))
 			if len(got) == 0 {
 				t.Fatalf("Mimir stored nothing; push responses: %q", r.push)
 			}
@@ -171,11 +170,15 @@ func finish(s series) series {
 }
 
 // model runs the Mimir model over the requests, split into units as a
-// replay splits recordings.
-func model(t *testing.T, raw map[string]any, requests []pmetric.Metrics) series {
-	var l Limits
-	if err := collector.Decode(raw, &l); err != nil {
+// replay splits recordings, with the limits it loads from the files Mimir
+// runs with (decision 74).
+func model(t *testing.T, src Source, requests []pmetric.Metrics) series {
+	l, err := Load(src)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(l.Unverified) > 0 {
+		t.Fatalf("the model doesn't vouch for these limits: %q", l.Unverified)
 	}
 	var items []unit.Metric
 	for _, md := range requests {
@@ -239,6 +242,12 @@ func compare(want, got series) string {
 		}
 	}
 	return b.String()
+}
+
+// source is where the model reads a tenant's limits: the files Mimir runs
+// with.
+func (m *mimirProc) source(tenant string) Source {
+	return Source{Config: filepath.Join(m.dir, "mimir.yaml"), RuntimeConfig: filepath.Join(m.dir, "runtime.yaml"), Tenant: tenant}
 }
 
 // mimirProc is a Mimir process with one tenant per run.
@@ -336,9 +345,11 @@ func (m *mimirProc) start(t *testing.T, overrides map[string]any) {
 	if err := m.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	exited := make(chan error, 1)
+	go func() { exited <- m.cmd.Wait() }()
 	t.Cleanup(func() {
 		_ = m.cmd.Process.Kill()
-		_, _ = m.cmd.Process.Wait()
+		<-exited
 		if t.Failed() {
 			t.Logf("Mimir's log:\n%s", tail(m.log.String(), 40))
 		}
@@ -355,10 +366,15 @@ func (m *mimirProc) start(t *testing.T, overrides map[string]any) {
 			}
 			err = fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
 		}
-		if time.Now().After(deadline) || m.cmd.ProcessState != nil {
+		if time.Now().After(deadline) {
 			t.Fatalf("Mimir isn't ready: %v\n%s", err, tail(m.log.String(), 40))
 		}
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case werr := <-exited:
+			exited <- werr // for the cleanup
+			t.Fatalf("Mimir exited (%v):\n%s", werr, tail(m.log.String(), 40))
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 }
 

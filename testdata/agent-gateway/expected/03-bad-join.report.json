@@ -1025,6 +1025,11 @@
       "severity": "unverified",
       "where": "agent/exporters/otlp/gateway -\u003e gateway/receivers/otlp",
       "message": "otlp/gateway sends to port 4318, but receiver gateway/otlp listens on port 4317"
+    },
+    {
+      "severity": "warning",
+      "where": "mimir",
+      "message": "answers assume the tenant stays within Mimir's rate, series, sample-time, query and rule limits, which a replay can't check"
     }
   ]
 }

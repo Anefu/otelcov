@@ -996,6 +996,13 @@
       }
     }
   ],
+  "problems": [
+    {
+      "severity": "warning",
+      "where": "mimir",
+      "message": "answers assume the tenant stays within Mimir's rate, series, sample-time, query and rule limits, which a replay can't check"
+    }
+  ],
   "stages": {
     "agent/batch": {
       "fidelity": "approximation",

@@ -129,6 +129,12 @@ func Validate(f *File) *Validation {
 			add(Fatal, name, "config: %v", err)
 		}
 		checkHash(name, b.Config, b.SHA256)
+		if b.RuntimeConfig != "" {
+			if _, err := os.Stat(b.RuntimeConfig); err != nil {
+				add(Fatal, name, "runtime config: %v", err)
+			}
+			checkHash(name, b.RuntimeConfig, b.RuntimeConfigSHA256)
+		}
 	}
 	for _, name := range Names(f.Consumers) {
 		c := f.Consumers[name]

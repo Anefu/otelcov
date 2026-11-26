@@ -52,6 +52,7 @@ plugin otelcov-plugin-otelcol-contrib: models otelcol-contrib 0.139.0, reviewed 
 ```console
 $ bin/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.yaml
 02-sidecar-added (evaluated at 2026-10-23T10:00:30Z)
+  warning: mimir-otlp: answers assume the tenant stays within Mimir's rate, series, sample-time, query and rule limits, which a replay can't check
   covered (modelled)      inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
       path: s1 → p1 → r1 → a1 → inference-pager
       modelled: collector/batch (approximation: passes data through)
@@ -69,12 +70,15 @@ Processors explain themselves too. Here a pull request changes the condition of 
 ```console
 $ bin/otelcov scenario testdata/agent-gateway/scenarios/02-team-condition-pr.yaml
 02-team-condition-pr (evaluated at 2026-10-23T10:00:30Z)
+  warning: mimir: answers assume the tenant stays within Mimir's rate, series, sample-time, query and rule limits, which a replay can't check
   NOT COVERED             inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
       path: s1 → p1 ✗ rule/team:vllm_memory_bytes:max
       why: Rule `team:vllm_memory_bytes:max` only selects series matching `team="inference"`, and this pod's series has no `team` label, so it never reaches `VLLMMemoryHigh`. `team` comes from resource attribute `team`, which `gateway/transform/team` didn't set: resource statement `set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"` didn't run: its condition is false for this signal.
       fix: Make the condition `attributes["k8s.namespace.name"] == "inference-prod"` in `gateway/transform/team` hold for this pod, or set `team` another way.
   ...
 ```
+
+Mimir configs work as deployed. otelcov reads the limits section and, when the topology names them, the runtime config file and the tenant whose overrides apply. Every Mimir 3.0–3.2 limit is sorted by what it can do to coverage. Limits that can't change it are ignored. Rate, series and timing limits, which a replay can't see, are assumed met, and the warning above says so. A limit that changes what's stored or how rules run, and that otelcov doesn't model (such as `drop_labels`), makes answers through Mimir `unverified` and names the limit.
 
 The topology file is checked on every run: an exporter sending to the wrong port, a receiver listening on localhost only, or an exporter that isn't connected to anything is reported, and coverage through it is marked `unverified` or the run stops.
 
