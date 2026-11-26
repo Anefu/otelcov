@@ -24,7 +24,7 @@ func TestScenarioCommand(t *testing.T) {
 	if code := run([]string{"scenario", "-json", "../../testdata/thin-slice/scenarios/01-single-container.yaml"}, &out, &errs); code != 0 {
 		t.Fatalf("exit %d, want 0", code)
 	}
-	if !strings.Contains(out.String(), `"status": "covered"`) {
+	if !strings.Contains(out.String(), `"status": "covered_modelled"`) || !strings.Contains(out.String(), `"modelled_by"`) {
 		t.Errorf("JSON output lacks statuses:\n%s", out.String())
 	}
 

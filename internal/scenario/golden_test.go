@@ -50,7 +50,7 @@ func golden(t *testing.T, dir, path string) {
 			return
 		}
 		want := loadGolden(t, s.Expected)
-		for _, section := range []string{"scenario", "eval_time", "summary", "diagnosis", "problems", "signals", "events"} {
+		for _, section := range []string{"scenario", "eval_time", "summary", "diagnosis", "problems", "stages", "signals", "events"} {
 			diff(t, section, got[section], want[section])
 		}
 		for k := range want {

@@ -5,24 +5,33 @@
     {
       "requirement": "vllm-memory-watched",
       "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
-      "status": "not_covered",
+      "status": "not_covered_modelled",
       "path": [
         "s1",
         "p1"
       ],
-      "broken_at": "rule/team:vllm_memory_bytes:max"
+      "broken_at": "rule/team:vllm_memory_bytes:max",
+      "modelled_by": [
+        "backend/mimir"
+      ]
     },
     {
       "requirement": "vllm-memory-watched",
       "pod": "inference/vllm-embed-5c8b9d6f7b-q4m9t",
-      "status": "covered",
+      "status": "covered_modelled",
       "path": [
         "s4",
         "p3",
         "r1",
         "a1"
       ],
-      "receiver": "inference-pager"
+      "receiver": "inference-pager",
+      "modelled_by": [
+        "agent/batch",
+        "gateway/memory_limiter",
+        "gateway/batch",
+        "backend/mimir"
+      ]
     }
   ],
   "diagnosis": [
@@ -942,5 +951,23 @@
         ]
       }
     }
-  ]
+  ],
+  "stages": {
+    "agent/batch": {
+      "fidelity": "approximation",
+      "note": "passes data through"
+    },
+    "backend/mimir": {
+      "fidelity": "reimplementation",
+      "note": "Prometheus's OTLP translator configured from Mimir's limits"
+    },
+    "gateway/batch": {
+      "fidelity": "approximation",
+      "note": "passes data through"
+    },
+    "gateway/memory_limiter": {
+      "fidelity": "approximation",
+      "note": "passes data through"
+    }
+  }
 }

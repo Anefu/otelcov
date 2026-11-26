@@ -49,12 +49,18 @@ func RunMetrics(ctx context.Context, src MetricsSource, nodes []MetricsNode, log
 	return Process(ctx, nodes, out.Items, log)
 }
 
-// Process passes items through nodes in order, recording lineage in log.
+// Process passes items through nodes in order, recording lineage in log,
+// including which items entered each modelled stage (lineage.Log.Cross).
 func Process(ctx context.Context, nodes []MetricsNode, items []unit.Metric, log *lineage.Log) ([]unit.Metric, error) {
 	for _, n := range nodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		ids := make([]lineage.SignalID, len(items))
+		for i, it := range items {
+			ids[i] = it.ID
+		}
+		log.Cross(n.Name(), ids)
 		out, err := n.ProcessMetrics(ctx, items)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", n.Name(), err)
@@ -106,26 +112,39 @@ func apply(node string, out Output, log *lineage.Log) error {
 // Record logs a stage's lineage after checking it: new signals are unique,
 // events name a node and a known signal, and every output ID was described.
 // Non-metrics stages (alerts, routing) use it directly.
+//
+// The events are logged before the new signals, so a stage's events on its
+// inputs count as having happened before the signals it made from them.
 func Record(log *lineage.Log, node string, events []lineage.Event, signals []lineage.Signal, outputs []lineage.SignalID) error {
+	known := map[lineage.SignalID]bool{}
 	for _, s := range signals {
-		if err := log.AddSignal(s); err != nil {
-			return fmt.Errorf("%s: %w", node, err)
+		switch {
+		case s.ID == "":
+			return fmt.Errorf("%s: signal from %s has no ID", node, s.Node)
+		case known[s.ID] || log.HasSignal(s.ID):
+			return fmt.Errorf("%s: signal %s registered twice (second time by %s)", node, s.ID, s.Node)
 		}
+		known[s.ID] = true
 	}
 	for _, e := range events {
 		if e.Node == "" || e.Signal == "" {
 			return fmt.Errorf("%s: event %q without node or signal", node, e.Action)
 		}
-		if !log.HasSignal(e.Signal) {
+		if !known[e.Signal] && !log.HasSignal(e.Signal) {
 			return fmt.Errorf("%s: event %q on unknown signal %s", node, e.Action, e.Signal)
 		}
 	}
 	for _, id := range outputs {
-		if !log.HasSignal(id) {
+		if !known[id] && !log.HasSignal(id) {
 			return fmt.Errorf("%s: output %s was never described", node, id)
 		}
 	}
 	log.Record(events...)
+	for _, s := range signals {
+		if err := log.AddSignal(s); err != nil {
+			return fmt.Errorf("%s: %w", node, err)
+		}
+	}
 	return nil
 }
 

@@ -224,14 +224,15 @@ func TestKindSetup(t *testing.T) {
 		t.Error("attributes the tap already has aren't detected values")
 	}
 
-	// Status per scenario and pod (vllm-chat, vllm-embed).
+	// Status per scenario and pod (vllm-chat, vllm-embed). Answers are
+	// modelled: they depend on batch and on the Mimir model (decision 71).
 	want := map[string][2]string{
-		"01-baseline.yaml":      {report.Covered, report.Covered},
-		"02-team-pr.yaml":       {report.NotCovered, report.NotCovered},
+		"01-baseline.yaml":      {report.CoveredModelled, report.CoveredModelled},
+		"02-team-pr.yaml":       {report.NotCoveredModelled, report.NotCoveredModelled},
 		"03-agent-badport.yaml": {report.Unverified, report.Unverified},
 		// The motivating bug: without its env var, vllm-embed's container
 		// can't be named (it has a sidecar). vllm-chat is unaffected.
-		"04-embed-no-env.yaml": {report.Covered, report.NotCovered},
+		"04-embed-no-env.yaml": {report.CoveredModelled, report.NotCoveredModelled},
 	}
 	for name, statuses := range want {
 		t.Run(name, func(t *testing.T) {

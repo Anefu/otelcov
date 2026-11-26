@@ -71,8 +71,8 @@ func TestCompare(t *testing.T) {
 	t.Log("\n" + got)
 	for _, want := range []string{
 		"02-team-condition-pr: skipped, not what's deployed (the gateway config differs from collector/gateway-pr.yaml)",
-		"vllm-chat-6f9d8b7c4d-k2x7p   covered  series: process_memory_usage_bytes; alert routed to inference-pager  agree",
-		"vllm-embed-5c8b9d6f7b-q4m9t  covered  series: process_memory_usage_bytes; no alert",
+		"vllm-chat-6f9d8b7c4d-k2x7p   covered_modelled  series: process_memory_usage_bytes; alert routed to inference-pager  agree",
+		"vllm-embed-5c8b9d6f7b-q4m9t  covered_modelled  series: process_memory_usage_bytes; no alert",
 		"DISAGREE: no alert",
 	} {
 		if !strings.Contains(got, want) {
@@ -109,7 +109,7 @@ func TestVerdict(t *testing.T) {
 		want   string
 	}{
 		{report.Covered, truth{receivers: []string{"pager"}}, "agree"},
-		{report.CoveredSimulated, truth{receivers: []string{"pager"}}, "agree"},
+		{report.CoveredModelled, truth{receivers: []string{"pager"}}, "agree"},
 		{report.Covered, truth{receivers: []string{"default"}}, "DISAGREE: routed elsewhere"},
 		{report.Covered, truth{ruler: "pending"}, "wait"},
 		{report.Covered, truth{metrics: []string{"m"}}, "DISAGREE: no alert"},
@@ -118,6 +118,8 @@ func TestVerdict(t *testing.T) {
 		{report.Covered, truth{gone: true}, "n/a: the pod was replaced"},
 		{report.NotCovered, truth{}, "agree"},
 		{report.NotCovered, truth{ruler: "firing"}, "DISAGREE: the alert exists"},
+		{report.NotCoveredModelled, truth{}, "agree"},
+		{report.NotCoveredModelled, truth{ruler: "firing"}, "DISAGREE: the alert exists"},
 		{report.Unverified, truth{}, "n/a"},
 	} {
 		if got := verdict(tc.status, tc.t, []string{"pager"}); !strings.HasPrefix(got, tc.want) {

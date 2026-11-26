@@ -5,26 +5,34 @@
     {
       "requirement": "vllm-memory-watched",
       "pod": "inference/vllm-chat-6f9d8b7c4d-k2x7p",
-      "status": "covered",
+      "status": "covered_modelled",
       "path": [
         "s1",
         "p1",
         "r1",
         "a1"
       ],
-      "receiver": "inference-pager"
+      "receiver": "inference-pager",
+      "modelled_by": [
+        "collector/batch",
+        "backend/mimir-otlp"
+      ]
     },
     {
       "requirement": "vllm-memory-watched",
       "pod": "inference/vllm-embed-5c8b9d6f7b-q4m9t",
-      "status": "covered",
+      "status": "covered_modelled",
       "path": [
         "s2",
         "p2",
         "r2",
         "a2"
       ],
-      "receiver": "inference-pager"
+      "receiver": "inference-pager",
+      "modelled_by": [
+        "collector/batch",
+        "backend/mimir-otlp"
+      ]
     }
   ],
   "diagnosis": [],
@@ -484,5 +492,15 @@
         ]
       }
     }
-  ]
+  ],
+  "stages": {
+    "backend/mimir-otlp": {
+      "fidelity": "reimplementation",
+      "note": "Prometheus's OTLP translator configured from Mimir's limits"
+    },
+    "collector/batch": {
+      "fidelity": "approximation",
+      "note": "passes data through"
+    }
+  }
 }

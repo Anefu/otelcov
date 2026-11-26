@@ -26,12 +26,17 @@ import (
 	"github.com/Anefu/otelcov/internal/version"
 )
 
-// Statuses.
+// Statuses. An answer is only as good as the stages it depends on
+// (decisions 67, 68 and 70): one that depends on otelcov's models rather than
+// the components' own behavior (an approximation, a reimplementation without
+// conformance tests, an sdk-env simulation) is "modelled", and one that
+// depends on a stage otelcov can't model is unverified.
 const (
-	Covered          = "covered"
-	CoveredSimulated = "covered_simulated"
-	NotCovered       = "not_covered"
-	Unverified       = "unverified"
+	Covered            = "covered"
+	CoveredModelled    = "covered_modelled"
+	NotCovered         = "not_covered"
+	NotCoveredModelled = "not_covered_modelled"
+	Unverified         = "unverified"
 )
 
 // Entry is the answer for one requirement and pod.
@@ -42,9 +47,13 @@ type Entry struct {
 	Path        []lineage.SignalID `json:"path"`
 	Receiver    string             `json:"receiver,omitempty"`
 	BrokenAt    string             `json:"broken_at,omitempty"`
-	// SimulatedBy lists the simulated events the path depends on.
+	// ModelledBy lists the modelled stages the answer depends on (see the
+	// report's stages).
+	ModelledBy []string `json:"modelled_by,omitempty"`
+	// SimulatedBy lists the simulated events the answer depends on.
 	SimulatedBy []string `json:"simulated_by,omitempty"`
-	// UnverifiedBy lists the unverified events on the path.
+	// UnverifiedBy lists the unverified events that make the answer
+	// unverified.
 	UnverifiedBy []string `json:"unverified_by,omitempty"`
 	Reason       string   `json:"reason,omitempty"`
 	// Destination names the alert and receiver (or other destination) the
@@ -77,7 +86,15 @@ type Report struct {
 	// Problems lists non-fatal problems found in the inputs: topology
 	// validation, pod fields otelcov doesn't know.
 	Problems []topology.Problem `json:"problems,omitempty"`
+	// Stages describes the modelled stages answers depend on.
+	Stages map[string]lineage.Stage `json:"stages,omitempty"`
 }
+
+// Modelled reports whether a status rests on otelcov's models.
+func Modelled(status string) bool { return status == CoveredModelled || status == NotCoveredModelled }
+
+// Failed reports whether a status says a requirement isn't met.
+func Failed(status string) bool { return status == NotCovered || status == NotCoveredModelled }
 
 // Build answers the requirements from a run's lineage. pods are the pods of
 // the config under test.
@@ -105,6 +122,12 @@ func Build(scenario, evalTime string, log *lineage.Log, reqs []requirements.Requ
 			if diag != nil {
 				r.Diagnosis = append(r.Diagnosis, *diag)
 			}
+			for _, node := range entry.ModelledBy {
+				if r.Stages == nil {
+					r.Stages = map[string]lineage.Stage{}
+				}
+				r.Stages[node] = log.Stage(node)
+			}
 		}
 	}
 	return r
@@ -123,7 +146,8 @@ type check struct {
 
 // answerRequirement checks every destination of a pod requirement and
 // returns the answer that matters most: the first not covered, else the first
-// unverified, else the first covered with simulation, else covered.
+// not covered by otelcov's models, else the first unverified, else the first
+// covered by otelcov's models, else covered.
 func (ix *index) answerRequirement(req requirements.Requirement, pod *corev1.Pod) (Entry, *Diagnosis) {
 	base := Entry{Requirement: req.ID, Pod: kube.Ref(pod), Path: []lineage.SignalID{}}
 	type result struct {
@@ -167,7 +191,7 @@ func (ix *index) answerRequirement(req requirements.Requirement, pod *corev1.Pod
 	if len(results) == 1 {
 		results[0].e.Destination = ""
 	}
-	for _, status := range []string{NotCovered, Unverified, CoveredSimulated} {
+	for _, status := range []string{NotCovered, NotCoveredModelled, Unverified, CoveredModelled} {
 		for _, r := range results {
 			if r.e.Status == status {
 				return r.e, r.d
@@ -185,17 +209,21 @@ func destination(alert, receiver string) string {
 }
 
 type index struct {
+	log      *lineage.Log
 	signals  map[lineage.SignalID]lineage.Signal
 	order    []lineage.SignalID
 	children map[lineage.SignalID][]lineage.SignalID
 	events   map[lineage.SignalID][]lineage.Event
+	byID     map[string]lineage.Event
 }
 
 func newIndex(log *lineage.Log) *index {
 	ix := &index{
+		log:      log,
 		signals:  map[lineage.SignalID]lineage.Signal{},
 		children: map[lineage.SignalID][]lineage.SignalID{},
 		events:   map[lineage.SignalID][]lineage.Event{},
+		byID:     map[string]lineage.Event{},
 	}
 	for _, s := range log.Signals() {
 		ix.signals[s.ID] = s
@@ -206,8 +234,45 @@ func newIndex(log *lineage.Log) *index {
 	}
 	for _, e := range log.Events() {
 		ix.events[e.Signal] = append(ix.events[e.Signal], e)
+		ix.byID[e.ID] = e
 	}
 	return ix
+}
+
+// onPath returns the events of a path's i-th signal that are part of the
+// path: those that happened before the path's next signal was made from it.
+// (A signal can go on elsewhere after a copy of it took the path.)
+func (ix *index) onPath(path []lineage.SignalID, i int) []lineage.Event {
+	before := ix.before(path, i)
+	if before == 0 {
+		return ix.events[path[i]]
+	}
+	var out []lineage.Event
+	for _, e := range ix.events[path[i]] {
+		if ix.log.EventSeq(e.ID) < before {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// before is the point at which the path's next signal was made from its
+// i-th signal; 0 for the last.
+func (ix *index) before(path []lineage.SignalID, i int) int {
+	if i+1 >= len(path) {
+		return 0
+	}
+	return ix.log.Born(path[i+1])
+}
+
+// add appends s to list unless it's there.
+func add(list []string, s string) []string {
+	for _, x := range list {
+		if x == s {
+			return list
+		}
+	}
+	return append(list, s)
 }
 
 func (ix *index) find(id lineage.SignalID, match func(lineage.Event) bool) (lineage.Event, bool) {
@@ -259,16 +324,23 @@ func (ix *index) answer(c check, pod *corev1.Pod, entry Entry) (Entry, *Diagnosi
 		}
 		return entry, nil
 	}
-	var fallback *Entry
+	// The pod is covered when one of its signals is: by the components'
+	// own behavior if one is, else by otelcov's models.
+	var modelled, fallback *Entry
 	var fallbackDiag *Diagnosis
 	for _, s := range srcs {
 		e, d := ix.answerFrom(c, s, entry)
-		if e.Status == Covered || e.Status == CoveredSimulated {
+		switch {
+		case e.Status == Covered:
 			return e, nil
-		}
-		if fallback == nil {
+		case e.Status == CoveredModelled && modelled == nil:
+			modelled = &e
+		case fallback == nil:
 			fallback, fallbackDiag = &e, d
 		}
+	}
+	if modelled != nil {
+		return *modelled, nil
 	}
 	return *fallback, fallbackDiag
 }
@@ -317,11 +389,14 @@ func (ix *index) answerFrom(c check, src lineage.SignalID, entry Entry) (Entry, 
 		routed, _ := ix.routedTo(hit, c.receiver)
 		entry.Receiver, _ = routed.Detail["receiver"].(string)
 		if d := ix.missingLabels(c, hit, &entry); d != nil {
+			ix.settle(&entry, d, "")
 			return entry, d
 		}
+		// A path depends on every stage it crosses (decision 67), and on
+		// the simulated events that set an attribute it needs.
 		needed := ix.neededAttributes(entry.Path, routed)
-		for _, id := range entry.Path {
-			for _, e := range ix.events[id] {
+		for i, id := range entry.Path {
+			for _, e := range ix.onPath(entry.Path, i) {
 				relevant := e.Attribute == "" || needed[e.Attribute] || ix.signals[id].Node != source.Name
 				if e.Action == lineage.Unverified && relevant {
 					entry.UnverifiedBy = append(entry.UnverifiedBy, e.ID)
@@ -330,12 +405,16 @@ func (ix *index) answerFrom(c check, src lineage.SignalID, entry Entry) (Entry, 
 					entry.SimulatedBy = append(entry.SimulatedBy, e.ID)
 				}
 			}
+			for _, node := range ix.log.Crossed(id, ix.before(entry.Path, i)) {
+				entry.ModelledBy = add(entry.ModelledBy, node)
+			}
 		}
 		switch {
 		case len(entry.UnverifiedBy) > 0:
 			entry.Status = Unverified
-		case len(entry.SimulatedBy) > 0:
-			entry.Status = CoveredSimulated
+			entry.ModelledBy, entry.SimulatedBy = nil, nil
+		case len(entry.ModelledBy) > 0 || len(entry.SimulatedBy) > 0:
+			entry.Status = CoveredModelled
 		default:
 			entry.Status = Covered
 		}
@@ -366,6 +445,7 @@ func (ix *index) answerFrom(c check, src lineage.SignalID, entry Entry) (Entry, 
 		if len(chain) > 0 {
 			d.RootCause = chain[len(chain)-1]
 		}
+		ix.settle(&entry, d, "")
 		return entry, d
 	}
 
@@ -398,8 +478,54 @@ func (ix *index) answerFrom(c check, src lineage.SignalID, entry Entry) (Entry, 
 		entry.Status, entry.UnverifiedBy = Unverified, []string{stopEvent.ID}
 		return entry, nil
 	}
+	d := ix.diagnose(c, entry, stopEvent)
+	ix.settle(&entry, d, stop)
+	return entry, d
+}
+
+// settle decides a break's status from what the break depends on (decision
+// 70): a stage otelcov can't model before the break, or an unverified event
+// on the attribute the diagnosis blames, makes it unverified; a modelled
+// stage or a simulated event in the diagnosis' chain, or a modelled stage
+// that made the dropped signal, makes it "not covered" by otelcov's models.
+// dropped is the signal dropped, if the break is a drop.
+func (ix *index) settle(entry *Entry, d *Diagnosis, dropped lineage.SignalID) {
+	blamed := map[string]bool{}
+	for i, id := range d.Chain {
+		if e := ix.byID[id]; i > 0 && e.Attribute != "" {
+			blamed[e.Attribute] = true
+		}
+	}
+	for i := range entry.Path {
+		for _, e := range ix.onPath(entry.Path, i) {
+			if e.Action == lineage.Unverified && (e.Attribute == "" || blamed[e.Attribute]) {
+				entry.UnverifiedBy = append(entry.UnverifiedBy, e.ID)
+			}
+		}
+	}
+	if len(entry.UnverifiedBy) > 0 {
+		entry.Status = Unverified
+		d.Explanation += " Steps on the way that otelcov can't model might change this, so the answer is unverified."
+		return
+	}
+	for _, id := range d.Chain {
+		e := ix.byID[id]
+		if ix.log.Stage(e.Node).Modelled() {
+			entry.ModelledBy = add(entry.ModelledBy, e.Node)
+		}
+		if e.Simulated {
+			entry.SimulatedBy = append(entry.SimulatedBy, e.ID)
+		}
+	}
+	if dropped != "" {
+		if made := ix.signals[dropped].Node; ix.log.Stage(made).Modelled() {
+			entry.ModelledBy = add(entry.ModelledBy, made)
+		}
+	}
 	entry.Status = NotCovered
-	return entry, ix.diagnose(c, entry, stopEvent)
+	if len(entry.ModelledBy) > 0 || len(entry.SimulatedBy) > 0 {
+		entry.Status = NotCoveredModelled
+	}
 }
 
 // missingLabels checks that an alert routed to the receiver carries the
@@ -415,7 +541,7 @@ func (ix *index) missingLabels(c check, alert lineage.SignalID, entry *Entry) *D
 	if len(missing) == 0 {
 		return nil
 	}
-	entry.Status, entry.BrokenAt = NotCovered, alerts.Prefix+c.alert
+	entry.BrokenAt = alerts.Prefix + c.alert
 	d := &Diagnosis{Requirement: c.requirement, Pod: entry.Pod, MissingLabel: missing[0],
 		Explanation: fmt.Sprintf("%s fires for this pod and reaches %s, but it has no %s label, which the requirement says it must carry.", q(c.alert), q(entry.Receiver), qs(missing)),
 		Hints:       []string{fmt.Sprintf("Keep %s in the alerting rule's expression (for example in its `by (…)`), or set it in the rule's labels.", qs(missing))}}

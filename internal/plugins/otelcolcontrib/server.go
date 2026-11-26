@@ -3,8 +3,9 @@
 // pins (decisions 66 to 68). It runs in its own process
 // (cmd/otelcov-plugin-otelcol-contrib) and models the distribution's
 // processors: the real collector-contrib code where otelcov runs it,
-// otelcov's own models of k8sattributes and resourcedetection, and batch and
-// memory_limiter as pass-throughs.
+// otelcov's own model of k8sattributes (held to upstream's tests),
+// resourcedetection's recorded results, and batch and memory_limiter as
+// pass-throughs.
 package otelcolcontrib
 
 import (
@@ -78,8 +79,9 @@ func (s *Server) Describe(context.Context, *pluginv1.DescribeRequest) (*pluginv1
 	resp.Components = append(resp.Components,
 		// Held to upstream's own test cases, ported (decisions 51 and 69).
 		&pluginv1.Component{Kind: "processor", Type: "k8sattributes", Fidelity: pluginv1.Fidelity_FIDELITY_REIMPLEMENTATION, Conformance: true},
-		// Applies values recorded in the snapshot; no upstream cases ported.
-		&pluginv1.Component{Kind: "processor", Type: "resourcedetection", Fidelity: pluginv1.Fidelity_FIDELITY_REIMPLEMENTATION},
+		// Applies what the real processor detected when the data was recorded
+		// (decision 71).
+		&pluginv1.Component{Kind: "processor", Type: "resourcedetection", Fidelity: pluginv1.Fidelity_FIDELITY_REAL},
 		// Data passes through; batching and load shedding aren't modeled.
 		&pluginv1.Component{Kind: "processor", Type: "batch", Fidelity: pluginv1.Fidelity_FIDELITY_APPROXIMATION, Note: "passes data through"},
 		&pluginv1.Component{Kind: "processor", Type: "memory_limiter", Fidelity: pluginv1.Fidelity_FIDELITY_APPROXIMATION, Note: "passes data through"},
@@ -158,6 +160,7 @@ func (s *Server) Configure(ctx context.Context, req *pluginv1.ConfigureRequest) 
 			rec = &v
 		}
 		n, err = resourcedetection.New(name, raw, rec, s.in.snapshotPods, inst.GetNode())
+		fidelity = pluginv1.Fidelity_FIDELITY_REAL
 	case realproc.Supported(typ):
 		n, err = realproc.New(ctx, name, id, raw, s.ids)
 		fidelity = pluginv1.Fidelity_FIDELITY_REAL

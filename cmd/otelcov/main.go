@@ -7,8 +7,9 @@
 // signal reaches its alert and receiver, and why not when it doesn't. With
 // -html it also writes one page showing every scenario: a coverage matrix and
 // each pod's route through the stack. The exit status is 1 when anything is
-// not covered, 2 on errors. otelcov version prints otelcov's version and the
-// collector release it models.
+// not covered (by the components' behavior or by otelcov's models), 2 on
+// errors. otelcov version prints otelcov's version and the stage plugins it
+// finds.
 package main
 
 import (
@@ -116,7 +117,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			printText(stdout, rep)
 		}
 		for _, e := range rep.Summary {
-			if e.Status == report.NotCovered {
+			if report.Failed(e.Status) {
 				status = 1
 			}
 		}
@@ -158,16 +159,17 @@ func printText(w io.Writer, rep *report.Report) {
 	}
 	for _, e := range rep.Summary {
 		label := map[string]string{
-			report.Covered:          "covered",
-			report.CoveredSimulated: "covered (simulated)",
-			report.NotCovered:       "NOT COVERED",
-			report.Unverified:       "unverified",
+			report.Covered:            "covered",
+			report.CoveredModelled:    "covered (modelled)",
+			report.NotCovered:         "NOT COVERED",
+			report.NotCoveredModelled: "NOT COVERED (modelled)",
+			report.Unverified:         "unverified",
 		}[e.Status]
 		about := e.Requirement
 		if e.Destination != "" {
 			about += ": " + e.Destination
 		}
-		fmt.Fprintf(w, "  %-20s %s  [%s]\n", label, e.Pod, about)
+		fmt.Fprintf(w, "  %-23s %s  [%s]\n", label, e.Pod, about)
 		path := make([]string, len(e.Path))
 		for i, id := range e.Path {
 			path[i] = string(id)
@@ -179,6 +181,9 @@ func printText(w io.Writer, rep *report.Report) {
 			fmt.Fprintf(w, "      path: %s → %s\n", strings.Join(path, " → "), e.Receiver)
 		case len(path) > 0:
 			fmt.Fprintf(w, "      path: %s\n", strings.Join(path, " → "))
+		}
+		if len(e.ModelledBy) > 0 {
+			fmt.Fprintf(w, "      modelled: %s\n", modelled(e.ModelledBy, rep.Stages))
 		}
 		for _, id := range e.SimulatedBy {
 			ev := events[id]
@@ -197,4 +202,30 @@ func printText(w io.Writer, rep *report.Report) {
 			}
 		}
 	}
+}
+
+// modelled lists modelled stages, grouped by what they are:
+// "agent/batch, gateway/batch (approximation: passes data through); …".
+func modelled(nodes []string, stages map[string]lineage.Stage) string {
+	var order []string
+	by := map[string][]string{}
+	for _, n := range nodes {
+		st := stages[n]
+		what := string(st.Fidelity)
+		switch {
+		case st.Fidelity == lineage.Reimplementation:
+			what = "otelcov's own model, not tested against the real component"
+		case st.Note != "":
+			what += ": " + st.Note
+		}
+		if _, ok := by[what]; !ok {
+			order = append(order, what)
+		}
+		by[what] = append(by[what], n)
+	}
+	parts := make([]string, len(order))
+	for i, what := range order {
+		parts[i] = strings.Join(by[what], ", ") + " (" + what + ")"
+	}
+	return strings.Join(parts, "; ")
 }

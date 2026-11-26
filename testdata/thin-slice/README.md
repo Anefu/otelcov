@@ -19,8 +19,10 @@ The story: staging runs single-container pods; a PR adds a sidecar and is caught
 |---|---|---|---|
 | `01-single-container` | `baseline` | as recorded | covered |
 | `02-sidecar-added` | `baseline` | PR adds a sidecar | not covered; root cause in k8sattributes |
-| `04-fix-pr-simulated` | `baseline` | PR adds sidecar + `OTEL_RESOURCE_ATTRIBUTES` | covered_simulated |
+| `04-fix-pr-simulated` | `baseline` | PR adds sidecar + `OTEL_RESOURCE_ATTRIBUTES` | covered, depending on the simulated attribute |
 | `03-sidecar-fixed` | `fixed` (taken after 04 deployed) | as recorded | covered (observed) |
+
+Every answer is "modelled" (`covered_modelled`, `not_covered_modelled`) since decisions 70 and 71: the paths cross `batch`, an approximation, and the Mimir model, not yet tested against Mimir.
 
 01, 02 and 04 replay the same data with different config and get three different answers: that's `f(data, config)` doing what-ifs.
 
@@ -52,7 +54,7 @@ The story: staging runs single-container pods; a PR adds a sidecar and is caught
   - `dropped`: the input contributed to no output
   - `routed`: an alert reached a receiver
 - **Backend outputs**: data series first (`p1`, `p2`, ...), then one `target_info` series per resource, as Mimir's OTLP translator writes it. Its labels are `job` plus every non-identifying resource attribute.
-- **`summary`**: per requirement and pod: `status`, `path` (signal ids), and `receiver` or `broken_at`. Status is `covered`, `not_covered`, or `covered_simulated` when the path needs an attribute only sdk-env provided; `simulated_by` then lists those events. Attributes simulated but not needed (like `k8s.pod.uid` in 04) don't count.
+- **`summary`**: per requirement and pod: `status`, `path` (signal ids), and `receiver` or `broken_at`. Status is `covered`, `not_covered`, `unverified`, or `covered_modelled` / `not_covered_modelled` when the answer depends on otelcov's models: `modelled_by` lists the stages (described in `stages`), `simulated_by` the sdk-env events that provided an attribute the path needs. Attributes simulated but not needed (like `k8s.pod.uid` in 04) don't count.
 - **`diagnosis`**: per gap, the `chain` of events from where the path broke back to the `root_cause`.
 
 "Covered" means *watched*: the pod's series reaches the alert's input, with the threshold ignored. The third promtool test shows this matches real firing when you inject bad values.
@@ -95,3 +97,5 @@ otelcol-contrib validate --config=collector/collector.yaml
 - **Report built**: the golden test now compares whole reports exactly, event IDs included. The diagnosis explanation is now generated from the lineage (it names the rule, the matcher, the missing label, the attribute it comes from, and the root cause's own reason) instead of hand-written prose.
 - **Topology runner**: scenarios now name a topology file (`config: {pods, topology}`) instead of each config separately. The collector is named `collector` in `topology.yaml`, so node names (`collector/k8sattributes`) and the golden reports are unchanged.
 - **Identifiers quoted in diagnoses** (02): explanations, hints and k8sattributes' reason for not naming a container put identifiers in backticks, which the report page shows as code. Nothing else changed.
+- **Rewritten in `-update`'s key order** (2026-11-26): same content.
+- **Fidelity in verdicts** (decisions 67, 68, 70, 71; 2026-11-26): every status became "modelled". Covered paths list `collector/batch` (an approximation) and `backend/mimir-otlp` (the Mimir model, not yet tested against Mimir) in `modelled_by`; 02's break lists `backend/mimir-otlp`, which made the dropped series; 04's `covered_simulated` is `covered_modelled` with the same `simulated_by`. A `stages` section describes both. Signals, events and diagnoses didn't change.

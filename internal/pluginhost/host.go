@@ -51,7 +51,9 @@ type Info struct {
 // Component is how a plugin models a component type.
 type Component struct {
 	Fidelity pluginv1.Fidelity
-	Note     string
+	// Conformance: a reimplementation's ported upstream tests pass.
+	Conformance bool
+	Note        string
 }
 
 // ProcessorNote is a flow graph's note for a processor type: the plugin's
@@ -142,7 +144,7 @@ func (h *Host) discover() error {
 			}}
 			for _, comp := range desc.GetComponents() {
 				if comp.GetKind() == "processor" {
-					c.info.Processors[comp.GetType()] = Component{Fidelity: comp.GetFidelity(), Note: comp.GetNote()}
+					c.info.Processors[comp.GetType()] = Component{Fidelity: comp.GetFidelity(), Conformance: comp.GetConformance(), Note: comp.GetNote()}
 				}
 			}
 			var ok1, ok2 bool

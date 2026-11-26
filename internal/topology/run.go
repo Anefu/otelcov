@@ -160,11 +160,16 @@ func (r *Runner) flow(ctx context.Context, coll string, receivers map[string]boo
 			Reason: "no metrics pipeline of " + coll + " uses the receiver it arrives on"}))
 	}
 
+	// Each pipeline after the first gets copies of what the receiver got,
+	// and each exporter after the first copies of what the pipeline made.
+	// The copies are made after the first branch has run to the end, but
+	// branch off where the data forks.
+	received := r.log.Mark()
 	for pi, pid := range pipelines {
 		in := items
 		if pi > 0 {
 			var err error
-			if in, err = r.copies(items, "the receiver also feeds "+coll+" pipeline "+pid); err != nil {
+			if in, err = r.copies(items, "the receiver also feeds "+coll+" pipeline "+pid, received); err != nil {
 				return err
 			}
 		}
@@ -176,10 +181,11 @@ func (r *Runner) flow(ctx context.Context, coll string, receivers map[string]boo
 		if err != nil {
 			return err
 		}
+		processed := r.log.Mark()
 		for ei, exp := range cfg.Service.Pipelines[pid].Exporters {
 			x := out
 			if ei > 0 {
-				if x, err = r.copies(out, coll+" pipeline "+pid+" also exports to "+exp); err != nil {
+				if x, err = r.copies(out, coll+" pipeline "+pid+" also exports to "+exp, processed); err != nil {
 					return err
 				}
 			}
@@ -268,16 +274,25 @@ func processorName(cfg *collector.Config, c Collector, coll, pid, id string) str
 // exporterName is an exporter's node name in lineage.
 func exporterName(coll, exp string) string { return coll + "/" + exp }
 
+// processorNode builds a processor's stage and records its fidelity, so
+// answers can say which stages they depend on.
 func (r *Runner) processorNode(ctx context.Context, coll, name, id string, raw map[string]any, node string) (graph.MetricsNode, error) {
 	p := r.plugins[coll]
 	if p == nil {
+		r.log.SetStage(name, lineage.Stage{Fidelity: lineage.Unmodelled})
 		return graph.Unsupported{NodeName: name, Reason: r.noPlugin[coll]}, nil
 	}
-	return p.Stage(ctx, "processor", id, name, raw, pluginhost.Instance{Collector: coll, Node: node, Env: r.f.Collectors[coll].Env}, r.ids)
+	n, st, err := p.Stage(ctx, "processor", id, name, raw, pluginhost.Instance{Collector: coll, Node: node, Env: r.f.Collectors[coll].Env}, r.ids)
+	if err != nil {
+		return nil, err
+	}
+	r.log.SetStage(name, st)
+	return n, nil
 }
 
-// copies duplicates items for another branch, with new IDs.
-func (r *Runner) copies(items []unit.Metric, reason string) ([]unit.Metric, error) {
+// copies duplicates items for another branch, with new IDs, branching off
+// at a point from lineage.Log.Mark.
+func (r *Runner) copies(items []unit.Metric, reason string, at int) ([]unit.Metric, error) {
 	out := make([]unit.Metric, len(items))
 	var events []lineage.Event
 	var signals []lineage.Signal
@@ -295,7 +310,11 @@ func (r *Runner) copies(items []unit.Metric, reason string) ([]unit.Metric, erro
 	for i, it := range out {
 		ids[i] = it.ID
 	}
-	return out, graph.Record(r.log, CopyNode, events, signals, ids)
+	if err := graph.Record(r.log, CopyNode, events, signals, ids); err != nil {
+		return nil, err
+	}
+	r.log.Branched(ids, at)
+	return out, nil
 }
 
 func (r *Runner) record(node string, events []lineage.Event) error {

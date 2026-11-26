@@ -22,14 +22,62 @@ type Instance struct {
 	Env  map[string]collector.EnvVar
 }
 
-// Stage builds a stage instance in the plugin. A stage the plugin can't
-// model becomes graph.Unsupported (data passes through, unverified), and a
-// pass-through stage graph.PassThrough. ids is the run's sequence for new
-// items.
-func (p *Plugin) Stage(ctx context.Context, kind, componentID, nodeName string, raw map[string]any, inst Instance, ids *lineage.IDs) (graph.MetricsNode, error) {
+// Stage builds a stage instance in the plugin and says how faithful it is
+// (decision 67): the fidelity the plugin gives the instance, with the
+// conformance it declares for the component type. A stage the plugin can't
+// model becomes graph.Unsupported (data passes through, unverified) and is
+// unmodelled; a pass-through stage becomes graph.PassThrough. ids is the
+// run's sequence for new items.
+func (p *Plugin) Stage(ctx context.Context, kind, componentID, nodeName string, raw map[string]any, inst Instance, ids *lineage.IDs) (graph.MetricsNode, lineage.Stage, error) {
+	n, err := p.stage(ctx, kind, componentID, nodeName, raw, inst, ids)
+	if err != nil {
+		return nil, lineage.Stage{}, err
+	}
+	if u, ok := n.node.(graph.Unsupported); ok {
+		return u, lineage.Stage{Fidelity: lineage.Unmodelled}, nil
+	}
+	comp := p.c.info.Processors[collector.Type(componentID)]
+	if kind != "processor" {
+		comp = Component{}
+	}
+	st := lineage.Stage{Fidelity: fidelity(n.fidelity), Note: comp.Note}
+	if st.Fidelity == "" {
+		st.Fidelity = fidelity(comp.Fidelity)
+	}
+	switch st.Fidelity {
+	case lineage.Reimplementation:
+		st.Conformance = comp.Conformance
+	case "":
+		// The plugin doesn't say: count it as otelcov's own, untested model.
+		st.Fidelity = lineage.Reimplementation
+	}
+	return n.node, st, nil
+}
+
+type configured struct {
+	node     graph.MetricsNode
+	fidelity pluginv1.Fidelity
+}
+
+// fidelity converts the protocol's fidelity; "" when unspecified.
+func fidelity(f pluginv1.Fidelity) lineage.Fidelity {
+	switch f {
+	case pluginv1.Fidelity_FIDELITY_REAL:
+		return lineage.Real
+	case pluginv1.Fidelity_FIDELITY_REIMPLEMENTATION:
+		return lineage.Reimplementation
+	case pluginv1.Fidelity_FIDELITY_APPROXIMATION:
+		return lineage.Approximation
+	case pluginv1.Fidelity_FIDELITY_UNMODELLED:
+		return lineage.Unmodelled
+	}
+	return ""
+}
+
+func (p *Plugin) stage(ctx context.Context, kind, componentID, nodeName string, raw map[string]any, inst Instance, ids *lineage.IDs) (configured, error) {
 	cfg, err := json.Marshal(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", nodeName, err)
+		return configured{}, fmt.Errorf("%s: %w", nodeName, err)
 	}
 	req := &pluginv1.ConfigureRequest{
 		Kind: kind, ComponentId: componentID, NodeName: nodeName, Config: cfg,
@@ -43,15 +91,18 @@ func (p *Plugin) Stage(ctx context.Context, kind, componentID, nodeName string, 
 	}
 	resp, err := p.c.conn.Configure(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("plugin %s: %s: %w", p.c.info, nodeName, err)
+		return configured{}, fmt.Errorf("plugin %s: %s: %w", p.c.info, nodeName, err)
 	}
+	out := configured{fidelity: resp.GetFidelity()}
 	switch {
 	case resp.GetUnsupported() != "":
-		return graph.Unsupported{NodeName: nodeName, Reason: resp.GetUnsupported()}, nil
+		out.node = graph.Unsupported{NodeName: nodeName, Reason: resp.GetUnsupported()}
 	case resp.GetPassThrough():
-		return graph.PassThrough{NodeName: nodeName}, nil
+		out.node = graph.PassThrough{NodeName: nodeName}
+	default:
+		out.node = &stage{name: nodeName, conn: p.c.conn, handle: resp.GetHandle(), ids: ids}
 	}
-	return &stage{name: nodeName, conn: p.c.conn, handle: resp.GetHandle(), ids: ids}, nil
+	return out, nil
 }
 
 // stage is a stage instance in a plugin process.

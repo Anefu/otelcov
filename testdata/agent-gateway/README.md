@@ -37,6 +37,8 @@ The rule selects `team="inference"`, and `team` comes from the gateway's `transf
 | `08-node-filter-via-service` | the same agents; recorded while both apps sent to the agents' Service, so both reached the agent on `kind-worker2` | vllm-chat not covered: the agent on `kind-worker2` never sees it (it runs on `kind-worker`), so no pod attributes; root cause `agent/k8sattributes`, hint to send to its own node's agent. vllm-embed covered |
 | `09-node-filter-unknown-node` | the same agents, replayed from `staging`, which doesn't say which agent received each line | unverified: whether the agent sees each pod depends on its node, which isn't known |
 
+Since decisions 70 and 71, "covered" and "not covered" here are "modelled" (`covered_modelled`, `not_covered_modelled`): paths cross `batch` and `memory_limiter` (approximations) and the Mimir model (not yet tested against Mimir), and every break is at a rule, on a series the Mimir model made.
+
 ## Layout
 
 | Path | What it is |
@@ -87,3 +89,4 @@ and update the `sha256` fields, or the report will warn that the topology may be
 - **06 created** (2026-10-28) with k8sattributes namespace labels (decision 61): both pods covered, `team` set by `agent/k8sattributes` from the namespace's label; the PR's transform statement leaves no `skipped` event, since running it without its condition changes nothing. The other reports didn't change: the fixtures' k8sattributes configs list only attributes that were already modeled.
 - **Recordings move into the snapshot metadata** (decision 64): scenarios name only the snapshot; `staging.meta.yaml` lists `staging.otlp.jsonl`. No report changed.
 - **07–09 created** (2026-11-24) with the k8sattributes `filter` (decisions 64, 65). 07: both covered; its report differs from 01 only in signal origins and event order (each agent's recording runs to the end before the next). 08: vllm-chat not covered at the rule (no `k8s_container_name`), root cause `agent/k8sattributes`'s `skipped` `k8s.container.name` ("pod `inference/vllm-chat-…` matches …, but the processor never sees it: it runs on node `kind-worker`, …"), hint to send to the collector on `kind-worker`; resourcedetection sets `host.name: kind-worker2`, the agent's own host. 09: both unverified, by an `unverified` event at `agent/k8sattributes` per pod.
+- **Fidelity in verdicts** (decisions 67, 68, 70, 71; 2026-11-26): covered answers are `covered_modelled`, listing `agent/batch`, `gateway/memory_limiter`, `gateway/batch` and `backend/mimir` in `modelled_by`; not covered answers are `not_covered_modelled`, listing `backend/mimir`, which made the dropped series. A `stages` section describes them. 03 and 09 didn't change; signals, events and diagnoses didn't change anywhere.

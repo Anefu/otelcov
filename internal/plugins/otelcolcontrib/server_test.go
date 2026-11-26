@@ -23,7 +23,8 @@ func TestServer(t *testing.T) {
 	for _, c := range d.GetComponents() {
 		kinds[c.GetType()] = c.GetFidelity()
 	}
-	if kinds["transform"] != pluginv1.Fidelity_FIDELITY_REAL || kinds["k8sattributes"] != pluginv1.Fidelity_FIDELITY_REIMPLEMENTATION || kinds["batch"] != pluginv1.Fidelity_FIDELITY_APPROXIMATION {
+	if kinds["transform"] != pluginv1.Fidelity_FIDELITY_REAL || kinds["k8sattributes"] != pluginv1.Fidelity_FIDELITY_REIMPLEMENTATION ||
+		kinds["resourcedetection"] != pluginv1.Fidelity_FIDELITY_REAL || kinds["batch"] != pluginv1.Fidelity_FIDELITY_APPROXIMATION {
 		t.Errorf("components: %v", kinds)
 	}
 

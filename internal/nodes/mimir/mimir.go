@@ -35,6 +35,12 @@ const Prefix = "backend/"
 // Type is the topology backend type this node models.
 const Type = "mimir-otlp"
 
+// Fidelity is the model's (decision 71): Prometheus's OTLP translator,
+// configured from Mimir's limits, is otelcov's own model of Mimir's OTLP
+// ingestion. It counts as tested when differential runs against real Mimir
+// pass; until that suite exists, answers that depend on it are modelled.
+var Fidelity = lineage.Stage{Fidelity: lineage.Reimplementation, Note: "Prometheus's OTLP translator configured from Mimir's limits"}
+
 // Limits are the Mimir per-tenant limits that shape OTLP ingestion.
 type Limits struct {
 	// PromoteOTelResourceAttributes is a comma-separated list of resource

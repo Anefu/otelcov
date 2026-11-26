@@ -18,7 +18,7 @@
   --covered: #0f7a5f;
   --broken: #c22d2a;
   --unverified: #a3670f;
-  --simulated: #6646c2;
+  --modelled: #6646c2;
   --focus: #2747c8;
   --line: #1a2230;
   --sans: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -36,7 +36,7 @@
     --covered: #40bf98;
     --broken: #f0665f;
     --unverified: #e2a445;
-    --simulated: #a28cf2;
+    --modelled: #a28cf2;
     --focus: #8099ff;
     --line: #e5e8ed;
     color-scheme: dark;
@@ -95,12 +95,12 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 .cell.empty { cursor: default; color: var(--faint); border-left-color: transparent; }
 .s-covered { border-left-color: var(--covered); }
 .s-covered .status { color: var(--covered); }
-.s-simulated { border-left-color: var(--simulated); }
-.s-simulated .status { color: var(--simulated); }
 .s-broken { border-left-color: var(--broken); }
 .s-broken .status { color: var(--broken); }
 .s-unverified { border-left-color: var(--unverified); }
 .s-unverified .status { color: var(--unverified); }
+/* Answers that rest on otelcov's models: same color, dashed edge. */
+.cell.modelled { border-left-style: dashed; }
 
 /* Selected route */
 .route-head { display: grid; gap: 4px; padding-top: 20px; border-top: 2px solid var(--ink); }
@@ -114,7 +114,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 .notes li.why { border-left-color: var(--broken); }
 .notes li.fix { border-left-color: var(--covered); }
 .notes li.warn { border-left-color: var(--unverified); }
-.notes li.sim { border-left-color: var(--simulated); }
+.notes li.sim { border-left-color: var(--modelled); }
 .notes li.real { border-left-color: var(--focus); }
 .notes li.real.agree { border-left-color: var(--covered); }
 .notes li.real.disagree { border-left-color: var(--broken); }
@@ -150,7 +150,8 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 .pass .marker { left: 16px; top: 20px; width: 12px; height: 12px; }
 .hit .marker { background: var(--line); }
 .unv .marker { border-color: var(--unverified); background: var(--unverified); }
-.sim .marker { box-shadow: 0 0 0 3px var(--paper), 0 0 0 6px var(--simulated); }
+.sim .marker, .mod .marker { box-shadow: 0 0 0 3px var(--paper), 0 0 0 6px var(--modelled); }
+.station .name .model { display: block; color: var(--modelled); font-size: 0.82rem; line-height: 1.35; }
 .root .marker { box-shadow: 0 0 0 3px var(--paper), 0 0 0 6px var(--broken); }
 .brk .marker { border-radius: 2px; border-color: var(--broken); background: var(--broken); transform: rotate(45deg); }
 .side .marker { left: 34px; }
@@ -169,7 +170,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 .ev.dropped .what, .ev.brk .what { color: var(--broken); }
 .ev.unverified .what { color: var(--unverified); }
 .ev.skipped .what { color: var(--broken); }
-.ev.simulated .what::after { content: " (simulated)"; color: var(--simulated); font-weight: 400; }
+.ev.simulated .what::after { content: " (simulated)"; color: var(--modelled); font-weight: 400; }
 .ev.root { padding-left: 10px; border-left: 3px solid var(--broken); }
 .ev.root .tag { color: var(--broken); font-weight: 700; margin-right: 6px; }
 .station details summary { cursor: pointer; color: var(--muted); font-size: 0.86rem; }
@@ -185,6 +186,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 .key i.brk { border-radius: 2px; transform: rotate(45deg); background: var(--broken); border-color: var(--broken); }
 .key i.root { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--broken); }
 .key i.unv { border-color: var(--unverified); background: var(--unverified); }
+.key i.mod { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--modelled); }
 .key i.off { width: 8px; height: 8px; border-width: 2px; border-color: var(--rule); }
 
 .problems { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -237,10 +239,22 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
 
   var STATUS = {
     covered: { label: "Covered", cls: "s-covered" },
-    covered_simulated: { label: "Covered, simulated", cls: "s-simulated" },
+    covered_modelled: { label: "Covered (modelled)", cls: "s-covered modelled" },
     not_covered: { label: "Not covered", cls: "s-broken" },
+    not_covered_modelled: { label: "Not covered (modelled)", cls: "s-broken modelled" },
     unverified: { label: "Unverified", cls: "s-unverified" }
   };
+  function failed(status) { return status === "not_covered" || status === "not_covered_modelled"; }
+
+  // What a modelled stage is, from the report's stages; short leaves out
+  // the note, which flow graphs show already.
+  function modelText(st, short) {
+    if (!st) return "otelcov's model";
+    var what = st.fidelity === "approximation" ? "an approximation"
+      : st.fidelity === "reimplementation" ? "otelcov's own model, not tested against the real component"
+      : st.fidelity;
+    return what + (st.note && !short ? " (" + st.note + ")" : "");
+  }
 
   // h builds an element. Text is always set as text, never parsed as HTML.
   function h(tag, attrs) {
@@ -401,7 +415,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     var back = reach(Object.keys(visited), sc.inn, "from");
     var final = null;
     if (e.broken_at && nodeIndex(sc, e.broken_at) >= 0) final = e.broken_at;
-    else if (receiver && e.status !== "not_covered") final = receiver;
+    else if (receiver && !failed(e.status)) final = receiver;
     else nodes.forEach(function (n) { if (visited[n.id]) final = n.id; });
     var toFinal = final ? reach([final], sc.inn, "from") : {};
     var state = {};
@@ -506,16 +520,20 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     var rt = route(sc, e);
     var d = sc.diag[key(e.requirement, e.pod)];
     var marks = { root: d ? d.root_cause : null };
-    var unv = {}, sim = {};
+    var unv = {}, sim = {}, mod = {};
     (e.unverified_by || []).forEach(function (id) { unv[id] = true; });
     (e.simulated_by || []).forEach(function (id) { sim[id] = true; });
+    (e.modelled_by || []).forEach(function (n) { mod[n] = true; });
+    var stages = sc.report.stages || {};
 
     var verdict;
     if (e.status === "not_covered") verdict = ["Not covered: the route breaks at ", code(e.broken_at || "?"), "."];
+    else if (e.status === "not_covered_modelled") verdict = ["Not covered, as far as otelcov's models go: the route breaks at ", code(e.broken_at || "?"), "."];
+    else if (e.status === "unverified" && e.broken_at && d) verdict = ["Unverified: the route breaks at ", code(e.broken_at), ", but the break depends on a step otelcov can't model."];
     else if (e.status === "unverified" && e.broken_at) verdict = ["Unverified: nothing to follow from ", code(e.broken_at), "."];
     else if (e.status === "unverified" && !e.receiver) verdict = ["Unverified: otelcov can't check this yet."];
     else if (e.status === "unverified") verdict = ["Unverified: the route reaches ", code(e.receiver || "?"), ", but otelcov can't vouch for every step."];
-    else if (e.status === "covered_simulated") verdict = ["Covered, if the simulated changes deploy as written: reaches ", code(e.receiver || "?"), "."];
+    else if (e.status === "covered_modelled") verdict = ["Covered, as far as otelcov's models go: reaches ", code(e.receiver || "?"), "."];
     else verdict = ["Covered: reaches ", code(e.receiver || "?"), "."];
 
     var notes = h("ul", { class: "notes" });
@@ -531,6 +549,9 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     (e.unverified_by || []).forEach(function (id) {
       var ev = sc.eventById[id];
       if (ev) notes.appendChild(h("li", { class: "warn" }, h("span", { class: "k", text: "Unverified at" }), code(ev.node), ": ", prose(ev.reason)));
+    });
+    (e.modelled_by || []).forEach(function (n) {
+      notes.appendChild(h("li", { class: "sim" }, h("span", { class: "k", text: "Modelled" }), code(n), ": " + modelText(stages[n]) + "."));
     });
     (e.simulated_by || []).forEach(function (id) {
       var ev = sc.eventById[id];
@@ -557,7 +578,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     nodes.forEach(function (n, i) { if (rt.state[n.id] === "main") mainIdx.push(i); });
     var first = mainIdx.length ? mainIdx[0] : -1;
     var last = rt.final ? nodeIndex(sc, rt.final) : (mainIdx.length ? mainIdx[mainIdx.length - 1] : -1);
-    var broken = e.status === "not_covered" || (e.status === "unverified" && !!e.broken_at);
+    var broken = failed(e.status) || (e.status === "unverified" && !!e.broken_at);
     var breakIdx = broken ? last : -1;
     var rootNode = d && sc.eventById[d.root_cause] ? sc.eventById[d.root_cause].node : null;
 
@@ -582,6 +603,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
       if (s !== "off" && i !== breakIdx) cls.push(evs.length || rt.created[n.id] || rt.receiver === n.id ? "hit" : "pass");
       if (evs.some(function (ev) { return unv[ev.id] || ev.action === "unverified"; })) cls.push("unv");
       if (evs.some(function (ev) { return sim[ev.id] || ev.simulated; })) cls.push("sim");
+      if (mod[n.id]) cls.push("mod");
 
       var inEdgeNote = null;
       (sc.inn[n.id] || []).forEach(function (ed) { if (ed.note && rt.state[ed.from] !== "off") inEdgeNote = ed.note; });
@@ -600,7 +622,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
           evs.slice(6).map(function (ev) { return eventView(sc, ev, marks, n.kind); })));
       }
       if (n.kind === "receiver" && rt.receiver === n.id) evViews.push(h("div", { class: "ev" }, h("span", { class: "what", text: "Paged" })));
-      if (i === breakIdx && !evs.some(function (ev) { return ev.action === "dropped"; }) && e.status === "not_covered") {
+      if (i === breakIdx && !evs.some(function (ev) { return ev.action === "dropped"; }) && failed(e.status)) {
         evViews.push(h("div", { class: "ev brk" }, h("span", { class: "what", text: "The route ends here" })));
       }
 
@@ -608,6 +630,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
         h("div", { class: "track", "aria-hidden": "true" }, s === "side" ? h("span", { class: "elbow" }) : null, h("span", { class: "marker" })),
         h("div", { class: "name" }, h("span", { class: "label" }, breakable(n.label)),
           n.note ? h("span", { class: "note", text: n.note }) : null,
+          mod[n.id] ? h("span", { class: "model", text: "Modelled: " + modelText(stages[n.id], true) }) : null,
           inEdgeNote ? h("span", { class: "edge-note", text: "Join can't be trusted: " + inEdgeNote }) : null),
         h("div", { class: "events" }, evViews),
         countsView(sc, n.id));
@@ -621,6 +644,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
       h("span", null, h("i", { class: "brk" }), "Route breaks"),
       h("span", null, h("i", { class: "root" }), "Root cause"),
       h("span", null, h("i", { class: "unv" }), "Unverified"),
+      h("span", null, h("i", { class: "mod" }), "Modelled by otelcov"),
       h("span", null, h("i", { class: "off" }), "Not on this route")));
 
     var probs = sc.report.problems || [];
@@ -667,7 +691,7 @@ table.matrix { border-collapse: collapse; min-width: 100%; }
     scenarios.some(function (sc, si) {
       return rows.some(function (row) {
         var e = sc.entries[key(row.req, row.pod)];
-        if (e && e.status !== "covered") { start = [si, row]; return true; }
+        if (e && e.status !== "covered" && e.status !== "covered_modelled") { start = [si, row]; return true; }
         return false;
       });
     });

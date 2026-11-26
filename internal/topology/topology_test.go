@@ -348,6 +348,40 @@ func TestRunWithoutPlugin(t *testing.T) {
 			if got := problems(r.v, Unverified); len(got) != 1 || got[0] != "agent: "+tc.why+", so its processors are unverified" {
 				t.Errorf("problems: %q", got)
 			}
+			if st := log.Stage("agent/batch"); st.Fidelity != lineage.Unmodelled {
+				t.Errorf("agent/batch: %+v, want unmodelled", st)
+			}
 		})
+	}
+}
+
+// The runner records each processor's fidelity, and copies branch off where
+// the data forks: a stage the first branch crosses later isn't on theirs.
+func TestRunRecordsStages(t *testing.T) {
+	_, log := run(t, fixture(t,
+		[3]string{"gateway.yaml", "metrics: {receivers: [otlp], processors: [batch], exporters: [otlphttp/mimir, debug]}",
+			"metrics: {receivers: [otlp], processors: [batch], exporters: [otlphttp/mimir]}\n    metrics/debug: {receivers: [otlp], exporters: [debug]}"},
+		[3]string{"agent.yaml", "  batch: {}", "  batch: {}\n  k8sattributes: {}\n  transform: {}"},
+		[3]string{"agent.yaml", "processors: [batch]", "processors: [k8sattributes, transform, batch]"}))
+	for node, want := range map[string]lineage.Stage{
+		"gateway/batch":       {Fidelity: lineage.Approximation, Note: "passes data through"},
+		"agent/k8sattributes": {Fidelity: lineage.Reimplementation, Conformance: true},
+		"agent/transform":     {Fidelity: lineage.Real},
+	} {
+		if got := log.Stage(node); got != want {
+			t.Errorf("%s: %+v, want %+v", node, got, want)
+		}
+	}
+	var copied lineage.SignalID
+	for _, s := range log.Signals() {
+		if s.Node == CopyNode {
+			copied = s.ID
+		}
+	}
+	if got := strings.Join(log.Crossed("s1", 0), ","); got != "agent/batch,gateway/batch" {
+		t.Errorf("s1 crossed %s", got)
+	}
+	if got := strings.Join(log.Crossed("s1", log.Born(copied)), ","); copied == "" || got != "agent/batch" {
+		t.Errorf("before copy %q branched off: %s", copied, got)
 	}
 }

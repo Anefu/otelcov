@@ -302,7 +302,7 @@ func verdict(status string, t truth, receivers []string) string {
 		return "n/a: the pod was replaced since the capture; capture again"
 	}
 	switch status {
-	case report.Covered, report.CoveredSimulated:
+	case report.Covered, report.CoveredModelled:
 		switch {
 		case routed:
 			return "agree"
@@ -315,7 +315,7 @@ func verdict(status string, t truth, receivers []string) string {
 		default:
 			return "DISAGREE: no alert"
 		}
-	case report.NotCovered:
+	case report.NotCovered, report.NotCoveredModelled:
 		if alerting {
 			return "DISAGREE: the alert exists"
 		}

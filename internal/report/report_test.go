@@ -238,3 +238,176 @@ func TestAssociationHints(t *testing.T) {
 		}
 	}
 }
+
+// mustAdd registers signals or fails the test.
+func mustAdd(t *testing.T, log *lineage.Log, signals ...lineage.Signal) {
+	t.Helper()
+	for _, s := range signals {
+		if err := log.AddSignal(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+var (
+	batch    = lineage.Stage{Fidelity: lineage.Approximation, Note: "passes data through"}
+	untested = lineage.Stage{Fidelity: lineage.Reimplementation}
+	tested   = lineage.Stage{Fidelity: lineage.Reimplementation, Conformance: true}
+)
+
+// Positive answers depend on every stage the path crosses (decision 67).
+func TestCoveredFidelity(t *testing.T) {
+	// reach builds a covered path s1 → [c1 →] p1 → a1; between runs after the
+	// source signal is recorded. With copy, the path goes through c1, which
+	// branches off s1 at the point between returns.
+	reach := func(between func(*lineage.Log), copy bool) *Report {
+		log := lineage.NewLog()
+		mustAdd(t, log, lineage.Signal{ID: "s1", Node: "source/otlp-replay", Kind: "otlp_metric", Name: "m"})
+		log.Record(lineage.Event{Node: "source/sdk-env", Signal: "s1", Action: lineage.Attributed, Detail: map[string]any{"pod": "ns/p", "container": "app"}})
+		parent := lineage.SignalID("s1")
+		if copy {
+			fork := log.Mark()
+			between(log)
+			mustAdd(t, log, lineage.Signal{ID: "c1", Node: "topology", Kind: "otlp_metric", From: []lineage.SignalID{"s1"}})
+			log.Branched([]lineage.SignalID{"c1"}, fork)
+			parent = "c1"
+		} else {
+			between(log)
+		}
+		mustAdd(t, log,
+			lineage.Signal{ID: "p1", Node: "backend/mimir-otlp", Kind: "series", From: []lineage.SignalID{parent}, Labels: map[string]string{"__name__": "m"}},
+			lineage.Signal{ID: "a1", Node: "alert/A", Kind: "alert", From: []lineage.SignalID{"p1"}})
+		log.Record(
+			lineage.Event{Node: "alert/A", Signal: "a1", Action: lineage.Derived, From: []lineage.SignalID{"p1"}, Detail: map[string]any{"expr": "m"}},
+			routed("pager"))
+		return Build("x", "", log, []requirements.Requirement{req()}, pods("p"))
+	}
+	t.Run("through an approximation", func(t *testing.T) {
+		r := reach(func(log *lineage.Log) {
+			log.SetStage("collector/batch", batch)
+			log.Cross("collector/batch", []lineage.SignalID{"s1"})
+		}, false)
+		e := r.Summary[0]
+		if e.Status != CoveredModelled || strings.Join(e.ModelledBy, ",") != "collector/batch" {
+			t.Errorf("%+v", e)
+		}
+		if r.Stages["collector/batch"] != batch {
+			t.Errorf("stages = %+v", r.Stages)
+		}
+	})
+	t.Run("through real and tested stages", func(t *testing.T) {
+		e := reach(func(log *lineage.Log) {
+			log.SetStage("collector/k8sattributes", tested)
+			log.Cross("collector/k8sattributes", []lineage.SignalID{"s1"})
+			log.Cross("collector/transform", []lineage.SignalID{"s1"})
+		}, false).Summary[0]
+		if e.Status != Covered || len(e.ModelledBy) != 0 {
+			t.Errorf("%+v", e)
+		}
+	})
+	t.Run("a stage on another branch isn't on the path", func(t *testing.T) {
+		// s1 goes on through batch on the first branch; the copy that takes
+		// the path branched off before.
+		e := reach(func(log *lineage.Log) {
+			log.SetStage("gateway/batch", batch)
+			log.Cross("gateway/batch", []lineage.SignalID{"s1"})
+			log.Record(lineage.Event{Node: "gateway/thing", Signal: "s1", Action: lineage.Unverified, Reason: "on the other branch"})
+		}, true).Summary[0]
+		if e.Status != Covered || strings.Join(stringsOf(e.Path), ",") != "s1,c1,p1,a1" {
+			t.Errorf("%+v", e)
+		}
+	})
+	t.Run("the stage that made the series", func(t *testing.T) {
+		e := reach(func(log *lineage.Log) {
+			log.SetStage("backend/mimir-otlp", untested)
+			log.Cross("backend/mimir-otlp", []lineage.SignalID{"s1"})
+		}, false).Summary[0]
+		if e.Status != CoveredModelled || strings.Join(e.ModelledBy, ",") != "backend/mimir-otlp" {
+			t.Errorf("%+v", e)
+		}
+	})
+}
+
+func stringsOf(ids []lineage.SignalID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = string(id)
+	}
+	return out
+}
+
+// Negative answers depend on unmodelled stages before the break and on the
+// diagnosis' chain (decision 70).
+func TestNotCoveredFidelity(t *testing.T) {
+	// drop builds a pod's series dropped by rule R for lacking label team,
+	// which transform didn't set and Mimir didn't promote. extra events on
+	// the recorded signal come after transform's; setup runs before the
+	// series is made.
+	drop := func(setup func(*lineage.Log), extra ...lineage.Event) *Report {
+		log := lineage.NewLog()
+		mustAdd(t, log, lineage.Signal{ID: "s1", Node: "source/otlp-replay", Kind: "otlp_metric", Name: "m"})
+		log.Record(
+			lineage.Event{Node: "source/sdk-env", Signal: "s1", Action: lineage.Attributed, Detail: map[string]any{"pod": "ns/p", "container": "app"}},
+			lineage.Event{Node: "collector/k8sattributes", Signal: "s1", Attribute: "k8s.pod.start_time", Action: lineage.Unverified, Reason: "not modeled"},
+			lineage.Event{Node: "collector/transform", Signal: "s1", Attribute: "team", Action: lineage.Skipped, Reason: "its condition didn't hold"},
+		)
+		log.Record(extra...)
+		if setup != nil {
+			setup(log)
+		}
+		mustAdd(t, log, lineage.Signal{ID: "p1", Node: "backend/mimir-otlp", Kind: "series", From: []lineage.SignalID{"s1"}, Labels: map[string]string{"__name__": "m"}})
+		log.Record(lineage.Event{Node: "backend/mimir-otlp", Signal: "p1", Attribute: "team", Action: lineage.Skipped, Reason: "absent on the input resource"})
+		log.Record(lineage.Event{Node: "rule/R", Signal: "p1", Attribute: "team", Action: lineage.Dropped, Reason: "no team label",
+			Detail: map[string]any{"requires": map[string]any{"label": "team", "matcher": `team="x"`, "clause": "selector"}}})
+		return Build("x", "", log, []requirements.Requirement{req()}, pods("p"))
+	}
+	t.Run("on real stages", func(t *testing.T) {
+		r := drop(nil)
+		if e := r.Summary[0]; e.Status != NotCovered || e.BrokenAt != "rule/R" || len(e.UnverifiedBy) != 0 {
+			t.Errorf("an unverified attribute the drop doesn't depend on counts: %+v", e)
+		}
+		if len(r.Diagnosis) != 1 || !strings.Contains(r.Diagnosis[0].Explanation, "`collector/transform` didn't set") {
+			t.Errorf("%+v", r.Diagnosis)
+		}
+	})
+	t.Run("on a series the Mimir model made", func(t *testing.T) {
+		r := drop(func(log *lineage.Log) { log.SetStage("backend/mimir-otlp", untested) })
+		if e := r.Summary[0]; e.Status != NotCoveredModelled || strings.Join(e.ModelledBy, ",") != "backend/mimir-otlp" {
+			t.Errorf("%+v", e)
+		}
+		if _, ok := r.Stages["backend/mimir-otlp"]; !ok {
+			t.Errorf("stages = %+v", r.Stages)
+		}
+	})
+	t.Run("an approximation before the break doesn't count", func(t *testing.T) {
+		e := drop(func(log *lineage.Log) {
+			log.SetStage("collector/batch", batch)
+			log.Cross("collector/batch", []lineage.SignalID{"s1"})
+		}).Summary[0]
+		if e.Status != NotCovered {
+			t.Errorf("%+v", e)
+		}
+	})
+	t.Run("after an unmodelled stage", func(t *testing.T) {
+		r := drop(nil, lineage.Event{Node: "collector/unknown", Signal: "s1", Action: lineage.Unverified, Reason: "processor type unknown isn't modeled yet"})
+		e := r.Summary[0]
+		if e.Status != Unverified || e.BrokenAt != "rule/R" || len(e.UnverifiedBy) != 1 {
+			t.Errorf("%+v", e)
+		}
+		if len(r.Diagnosis) != 1 || !strings.HasSuffix(r.Diagnosis[0].Explanation, "otelcov can't model might change this, so the answer is unverified.") {
+			t.Errorf("the diagnosis still says where it breaks, and why that's unverified: %+v", r.Diagnosis)
+		}
+	})
+	t.Run("with the blamed attribute unverified", func(t *testing.T) {
+		e := drop(nil, lineage.Event{Node: "collector/k8sattributes", Signal: "s1", Attribute: "team", Action: lineage.Unverified, Reason: "from a Deployment"}).Summary[0]
+		if e.Status != Unverified || len(e.UnverifiedBy) != 1 {
+			t.Errorf("%+v", e)
+		}
+	})
+	t.Run("on a simulated change", func(t *testing.T) {
+		e := drop(nil, lineage.Event{Node: "source/sdk-env", Signal: "s1", Attribute: "team", Action: lineage.Removed, Simulated: true, Reason: "the change removes it"}).Summary[0]
+		if e.Status != NotCoveredModelled || len(e.SimulatedBy) != 1 || len(e.ModelledBy) != 0 {
+			t.Errorf("%+v", e)
+		}
+	})
+}
