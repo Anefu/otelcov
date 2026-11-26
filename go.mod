@@ -39,6 +39,22 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
+// Plugins (decisions 67, 68): out-of-process stages over gRPC.
+require (
+	github.com/hashicorp/go-hclog v1.6.3
+	github.com/hashicorp/go-plugin v1.8.0
+	google.golang.org/grpc v1.76.0
+	google.golang.org/protobuf v1.36.10
+	// Generates the plugin protocol's gRPC code (go tool protoc-gen-go-grpc).
+	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.5.1
+)
+
+// Code generators for proto/, run with go tool (see AGENTS.md, Commands).
+tool (
+	google.golang.org/grpc/cmd/protoc-gen-go-grpc
+	google.golang.org/protobuf/cmd/protoc-gen-go
+)
+
 require (
 	cloud.google.com/go/auth v0.16.5 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
@@ -183,8 +199,6 @@ require (
 	golang.org/x/tools/godoc v0.1.0-deprecated // indirect
 	google.golang.org/api v0.250.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250922171735-9219d122eba9 // indirect
-	google.golang.org/grpc v1.76.0 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
