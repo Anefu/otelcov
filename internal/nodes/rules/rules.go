@@ -75,9 +75,13 @@ func (n *Node) evaluate(ctx context.Context, r rulefile.Recording, items []unit.
 			b.Set(k, v)
 		}
 		lset := b.Labels()
-		out.Items = append(out.Items, unit.Metric{ID: id, From: from, Data: unit.NewSeries(lset, unit.Sample{T: n.at, V: o.Value})})
+		out.Items = append(out.Items, unit.Metric{ID: id, From: from, Data: unit.NewSeries(lset, unit.Sample{T: n.at, V: o.Value, H: o.H})})
+		var value any = o.Value
+		if o.H != nil {
+			value = o.H.String()
+		}
 		out.Signals = append(out.Signals, lineage.Signal{
-			ID: id, Node: name, Kind: "series", From: from, Labels: lset.Map(), Value: o.Value,
+			ID: id, Node: name, Kind: "series", From: from, Labels: lset.Map(), Value: value,
 		})
 		pos := First(o.Parents)
 		ev.Add(pos, 0, lineage.Event{Node: name, Signal: id, Action: lineage.Derived, From: from, Detail: ExprDetail(r.Expr.String(), res)})

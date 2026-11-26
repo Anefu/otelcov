@@ -18,6 +18,7 @@ collectors:
 backends:
   mimir:
     type: mimir-otlp
+    version: 3.2.3
     config: backend/mimir.yaml
     sha256: 38a3060c209c98e72d0e0a290bab9ad0f1a05d53b6aae06e41fbec23987fc592
 consumers:

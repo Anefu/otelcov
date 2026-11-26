@@ -1,0 +1,60 @@
+name: mimir-conformance
+
+# The Mimir model's differential suite (decisions 71, 72): real Mimir at both
+# ends of the range the model is tested for (TestedMin and TestedMax in
+# internal/nodes/mimir), nightly, and on pushes that touch the model.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches-ignore: ["deps/**"]
+    paths:
+      - "internal/nodes/mimir/**"
+      - "internal/unit/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/mimir-conformance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Checksums from each release's mimir-linux-amd64-sha-256 file.
+          - mimir: 3.0.0
+            sha256: d8a025a02c3369dffd483ad435eed7b1504abe39b038b5e17ed46592fabf8921
+          - mimir: 3.2.6
+            sha256: d244aded3078dda0a0170837fbfbebbd2b5377b1d277242285c6e637b6622f30
+    name: Mimir ${{ matrix.mimir }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: ~/mimir
+          key: mimir-${{ matrix.mimir }}-${{ matrix.sha256 }}
+
+      - name: Download Mimir ${{ matrix.mimir }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/mimir
+          curl -fsSL -o ~/mimir/mimir https://github.com/grafana/mimir/releases/download/mimir-${{ matrix.mimir }}/mimir-linux-amd64
+
+      - name: Check the binary's checksum
+        run: |
+          echo "${{ matrix.sha256 }}  $HOME/mimir/mimir" | sha256sum -c -
+          chmod +x ~/mimir/mimir
+
+      - name: Compare the model with Mimir ${{ matrix.mimir }}
+        run: OTELCOV_MIMIR=$HOME/mimir/mimir go test ./internal/nodes/mimir -run TestConformance -count=1 -v

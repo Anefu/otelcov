@@ -73,6 +73,9 @@ type Backend struct {
 	Type   string `json:"type"`
 	Config string `json:"config"`
 	SHA256 string `json:"sha256,omitempty"`
+	// Version is the release the backend runs, e.g. Mimir 3.2.3. Whether
+	// otelcov's model of it is tested depends on it (decision 72).
+	Version string `json:"version,omitempty"`
 }
 
 // Consumer reads from a backend or another consumer.

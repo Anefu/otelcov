@@ -22,7 +22,7 @@ The story: staging runs single-container pods; a PR adds a sidecar and is caught
 | `04-fix-pr-simulated` | `baseline` | PR adds sidecar + `OTEL_RESOURCE_ATTRIBUTES` | covered, depending on the simulated attribute |
 | `03-sidecar-fixed` | `fixed` (taken after 04 deployed) | as recorded | covered (observed) |
 
-Every answer is "modelled" (`covered_modelled`, `not_covered_modelled`) since decisions 70 and 71: the paths cross `batch`, an approximation, and the Mimir model, not yet tested against Mimir.
+Covered answers are "modelled" (`covered_modelled`, decision 71): the paths cross `batch`, an approximation. 02's break is plain `not_covered`: the topology runs Mimir 3.2.3, for which the Mimir model is tested (decision 72).
 
 01, 02 and 04 replay the same data with different config and get three different answers: that's `f(data, config)` doing what-ifs.
 
@@ -99,3 +99,4 @@ otelcol-contrib validate --config=collector/collector.yaml
 - **Identifiers quoted in diagnoses** (02): explanations, hints and k8sattributes' reason for not naming a container put identifiers in backticks, which the report page shows as code. Nothing else changed.
 - **Rewritten in `-update`'s key order** (2026-11-26): same content.
 - **Fidelity in verdicts** (decisions 67, 68, 70, 71; 2026-11-26): every status became "modelled". Covered paths list `collector/batch` (an approximation) and `backend/mimir-otlp` (the Mimir model, not yet tested against Mimir) in `modelled_by`; 02's break lists `backend/mimir-otlp`, which made the dropped series; 04's `covered_simulated` is `covered_modelled` with the same `simulated_by`. A `stages` section describes both. Signals, events and diagnoses didn't change.
+- **The Mimir model tested** (decisions 72, 73; 2026-11-26): the topology gives Mimir `version: 3.2.3`, in the range the conformance suite covers, so `backend/mimir-otlp` left `modelled_by` and `stages`; 02's break is `not_covered` again. Nothing else changed.

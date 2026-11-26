@@ -16,6 +16,7 @@ collectors:
 backends:
   mimir:
     type: mimir-otlp
+    version: 3.2.3
     config: backend/mimir-suffixes-off.yaml
     sha256: a09276d06566efd9191387a573313e0987ff2622d48e8b8ff024099182b1cfd0
 consumers:

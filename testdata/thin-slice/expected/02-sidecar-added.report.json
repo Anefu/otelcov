@@ -14,22 +14,18 @@
       ],
       "receiver": "inference-pager",
       "modelled_by": [
-        "collector/batch",
-        "backend/mimir-otlp"
+        "collector/batch"
       ]
     },
     {
       "requirement": "vllm-memory-watched",
       "pod": "inference/vllm-embed-5c8b9d6f7b-q4m9t",
-      "status": "not_covered_modelled",
+      "status": "not_covered",
       "path": [
         "s2",
         "p2"
       ],
-      "broken_at": "rule/inference:vllm_memory_bytes:max",
-      "modelled_by": [
-        "backend/mimir-otlp"
-      ]
+      "broken_at": "rule/inference:vllm_memory_bytes:max"
     }
   ],
   "diagnosis": [
@@ -448,10 +444,6 @@
     }
   ],
   "stages": {
-    "backend/mimir-otlp": {
-      "fidelity": "reimplementation",
-      "note": "Prometheus's OTLP translator configured from Mimir's limits"
-    },
     "collector/batch": {
       "fidelity": "approximation",
       "note": "passes data through"

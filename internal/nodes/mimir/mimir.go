@@ -35,11 +35,59 @@ const Prefix = "backend/"
 // Type is the topology backend type this node models.
 const Type = "mimir-otlp"
 
-// Fidelity is the model's (decision 71): Prometheus's OTLP translator,
-// configured from Mimir's limits, is otelcov's own model of Mimir's OTLP
-// ingestion. It counts as tested when differential runs against real Mimir
-// pass; until that suite exists, answers that depend on it are modelled.
-var Fidelity = lineage.Stage{Fidelity: lineage.Reimplementation, Note: "Prometheus's OTLP translator configured from Mimir's limits"}
+// The Mimir versions the model is tested for (decision 72): the conformance
+// suite (TestConformance) runs real Mimir at both ends of the range, and any
+// version in between counts as tested. CI runs it at 3.0.0 and 3.2.6
+// (.github/workflows/mimir-conformance.yml).
+const (
+	TestedMin = "3.0"
+	TestedMax = "3.2"
+)
+
+// note says what the model is.
+const note = "Prometheus's OTLP translator configured from Mimir's limits"
+
+// Fidelity is the model's for a deployed Mimir version (decisions 71, 72):
+// Prometheus's OTLP translator, configured from Mimir's limits, is otelcov's
+// own model of Mimir's OTLP ingestion. It passes conformance for the versions
+// the differential suite covers; for others, or without a version, answers
+// that depend on it are modelled.
+func Fidelity(version string) lineage.Stage {
+	st := lineage.Stage{Fidelity: lineage.Reimplementation, Note: note}
+	v, ok := minor(version)
+	lo, _ := minor(TestedMin)
+	hi, _ := minor(TestedMax)
+	switch {
+	case version == "":
+		st.Note += "; the topology doesn't say which Mimir version runs, and the model is tested for " + TestedMin + "–" + TestedMax
+	case !ok:
+		st.Note += fmt.Sprintf("; version %q isn't a version like 3.2.3", version)
+	case less(v, lo) || less(hi, v):
+		st.Note += "; tested for Mimir " + TestedMin + "–" + TestedMax + ", not " + version
+	default:
+		st.Conformance = true
+	}
+	return st
+}
+
+// minor parses the major and minor version of "3.2", "3.2.3" or "v3.2.3".
+func minor(v string) ([2]int, bool) {
+	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
+	if len(parts) < 2 || len(parts) > 3 {
+		return [2]int{}, false
+	}
+	var out [2]int
+	for i := range out {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil || n < 0 {
+			return [2]int{}, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+func less(a, b [2]int) bool { return a[0] < b[0] || a[0] == b[0] && a[1] < b[1] }
 
 // Limits are the Mimir per-tenant limits that shape OTLP ingestion.
 type Limits struct {
@@ -167,10 +215,11 @@ func (a *appender) AppendSample(ls labels.Labels, _ prw.Metadata, _, t int64, v 
 	return nil
 }
 
-// AppendHistogram keeps the series without samples: native histograms aren't
-// modeled.
-func (a *appender) AppendHistogram(ls labels.Labels, _ prw.Metadata, _, _ int64, _ *histogram.Histogram, _ []exemplar.Exemplar) error {
-	a.get(ls)
+// AppendHistogram keeps a native histogram sample, as Mimir stores
+// exponential histograms (decision 73).
+func (a *appender) AppendHistogram(ls labels.Labels, _ prw.Metadata, _, t int64, h *histogram.Histogram, _ []exemplar.Exemplar) error {
+	s := a.get(ls)
+	s.samples = append(s.samples, unit.Sample{T: time.UnixMilli(t), H: h.ToFloat(nil)})
 	return nil
 }
 
@@ -260,7 +309,7 @@ func (n *Node) ProcessMetrics(ctx context.Context, in []unit.Metric) (graph.Outp
 		data := unit.NewSeries(cv.lset, cv.samples...)
 		out.Items = append(out.Items, unit.Metric{ID: id, From: cv.from, Data: data})
 		out.Signals = append(out.Signals, lineage.Signal{
-			ID: id, Node: n.name, Kind: "series", From: cv.from, Labels: cv.lset.Map(), Value: unit.LastValue(data),
+			ID: id, Node: n.name, Kind: "series", From: cv.from, Labels: cv.lset.Map(), Value: latest(cv.samples),
 		})
 		if cv.target {
 			out.Events = append(out.Events, lineage.Event{
@@ -321,6 +370,24 @@ func (n *Node) dataEvents(id lineage.SignalID, cv *converted) []lineage.Event {
 		}
 	}
 	return events
+}
+
+// latest is a series' latest value for lineage: a float, or a native
+// histogram in Prometheus's text form.
+func latest(samples []unit.Sample) any {
+	if len(samples) == 0 {
+		return 0.0
+	}
+	last := samples[0]
+	for _, s := range samples[1:] {
+		if s.T.After(last.T) {
+			last = s
+		}
+	}
+	if last.H != nil {
+		return last.H.String()
+	}
+	return last.V
 }
 
 func containsID(ids []lineage.SignalID, id lineage.SignalID) bool {

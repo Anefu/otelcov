@@ -20,6 +20,7 @@ collectors:
 backends:
   mimir:
     type: mimir-otlp
+    version: 3.2.3
     config: ../config/mimir.yaml
 consumers:
   rules:

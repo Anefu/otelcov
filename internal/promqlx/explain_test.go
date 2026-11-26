@@ -3,6 +3,7 @@ package promqlx
 import (
 	"context"
 	"errors"
+	"github.com/prometheus/prometheus/model/histogram"
 	"sort"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ var t0 = time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 // produce output.
 func testSeries() []Series {
 	mk := func(v float64, kv ...string) Series {
-		return Series{Labels: labels.FromStrings(kv...), Samples: []Sample{{t0.Add(-time.Minute), v}, {t0, v * 2}}}
+		return Series{Labels: labels.FromStrings(kv...), Samples: []Sample{{T: t0.Add(-time.Minute), V: v}, {T: t0, V: v * 2}}}
 	}
 	return []Series{
 		mk(10, "__name__", "http_requests_total", "job", "api", "instance", "a:80", "code", "200"),
@@ -264,5 +265,25 @@ func TestNameVariantDrops(t *testing.T) {
 	ex, _ = Explain(mustParse(t, `{__name__=~"process_memory_usage_bytes"}`), lsets)
 	if len(ex.Drops) != 0 {
 		t.Errorf("regex name matchers give no name drops: %+v", ex.Drops)
+	}
+}
+
+// Native histogram samples reach the engine.
+func TestNativeHistograms(t *testing.T) {
+	h := func(count float64) *histogram.FloatHistogram {
+		return &histogram.FloatHistogram{Schema: 0, Count: count, Sum: count * 2,
+			PositiveSpans: []histogram.Span{{Offset: 0, Length: 1}}, PositiveBuckets: []float64{count}}
+	}
+	series := []Series{{
+		Labels:  labels.FromStrings("__name__", "rpc_duration", "job", "api"),
+		Samples: []Sample{{T: t0.Add(-time.Minute), H: h(4)}, {T: t0, H: h(10)}},
+	}}
+	vec, err := NewEngine().Instant(context.Background(), `histogram_count(rpc_duration)`, series, t0)
+	if err != nil || len(vec) != 1 || vec[0].F != 10 {
+		t.Fatalf("histogram_count: %v %v", vec, err)
+	}
+	vec, err = NewEngine().Instant(context.Background(), `sum by (job) (rpc_duration)`, series, t0)
+	if err != nil || len(vec) != 1 || vec[0].H == nil || vec[0].H.Count != 10 {
+		t.Fatalf("sum: %v %v", vec, err)
 	}
 }

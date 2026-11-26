@@ -19,10 +19,12 @@ import (
 // DefaultLookback matches Prometheus and Mimir.
 const DefaultLookback = 5 * time.Minute
 
-// Sample is one value of a series.
+// Sample is one value of a series: a float, or a native histogram when H is
+// set.
 type Sample struct {
 	T time.Time
 	V float64
+	H *histogram.FloatHistogram
 }
 
 // Series is one input series.
@@ -82,7 +84,7 @@ func newQueryable(in []Series) *queryable {
 	q := &queryable{}
 	byKey := map[string]int{}
 	var lsets []labels.Labels
-	var samples [][]fSample
+	var samples [][]sample
 	for _, s := range in {
 		k := s.Labels.String()
 		i, ok := byKey[k]
@@ -100,7 +102,7 @@ func newQueryable(in []Series) *queryable {
 					continue next
 				}
 			}
-			samples[i] = append(samples[i], fSample{t: t, f: smp.V})
+			samples[i] = append(samples[i], sample{t: t, f: smp.V, fh: smp.H})
 		}
 	}
 	for i, ls := range lsets {
@@ -181,15 +183,26 @@ func (s *seriesSet) At() storage.Series                { return s.series[s.i] }
 func (s *seriesSet) Err() error                        { return nil }
 func (s *seriesSet) Warnings() annotations.Annotations { return nil }
 
-// fSample is a float sample.
-type fSample struct {
-	t int64
-	f float64
+// sample is a float sample, or a float histogram one when fh is set.
+type sample struct {
+	t  int64
+	f  float64
+	fh *histogram.FloatHistogram
 }
 
-func (s fSample) T() int64                      { return s.t }
-func (s fSample) F() float64                    { return s.f }
-func (s fSample) H() *histogram.Histogram       { return nil }
-func (s fSample) FH() *histogram.FloatHistogram { return nil }
-func (s fSample) Type() chunkenc.ValueType      { return chunkenc.ValFloat }
-func (s fSample) Copy() chunks.Sample           { return s }
+func (s sample) T() int64                      { return s.t }
+func (s sample) F() float64                    { return s.f }
+func (s sample) H() *histogram.Histogram       { return nil }
+func (s sample) FH() *histogram.FloatHistogram { return s.fh }
+func (s sample) Type() chunkenc.ValueType {
+	if s.fh != nil {
+		return chunkenc.ValFloatHistogram
+	}
+	return chunkenc.ValFloat
+}
+func (s sample) Copy() chunks.Sample {
+	if s.fh != nil {
+		s.fh = s.fh.Copy()
+	}
+	return s
+}

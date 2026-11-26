@@ -16,8 +16,7 @@
       "modelled_by": [
         "agent/batch",
         "gateway/memory_limiter",
-        "gateway/batch",
-        "backend/mimir"
+        "gateway/batch"
       ]
     },
     {
@@ -34,8 +33,7 @@
       "modelled_by": [
         "agent/batch",
         "gateway/memory_limiter",
-        "gateway/batch",
-        "backend/mimir"
+        "gateway/batch"
       ]
     }
   ],
@@ -1002,10 +1000,6 @@
     "agent/batch": {
       "fidelity": "approximation",
       "note": "passes data through"
-    },
-    "backend/mimir": {
-      "fidelity": "reimplementation",
-      "note": "Prometheus's OTLP translator configured from Mimir's limits"
     },
     "gateway/batch": {
       "fidelity": "approximation",

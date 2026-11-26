@@ -9,6 +9,7 @@ collectors:
 backends:
   mimir-otlp:
     type: mimir-otlp
+    version: 3.2.3
     config: backend/mimir-otlp.yaml
 consumers:
   rules:

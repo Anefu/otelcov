@@ -54,25 +54,23 @@ $ bin/otelcov scenario testdata/thin-slice/scenarios/02-sidecar-added.yaml
 02-sidecar-added (evaluated at 2026-10-23T10:00:30Z)
   covered (modelled)      inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
       path: s1 → p1 → r1 → a1 → inference-pager
-      modelled: collector/batch (approximation: passes data through); backend/mimir-otlp (otelcov's own model, not tested against the real component)
-  NOT COVERED (modelled)  inference/vllm-embed-5c8b9d6f7b-q4m9t  [vllm-memory-watched]
+      modelled: collector/batch (approximation: passes data through)
+  NOT COVERED             inference/vllm-embed-5c8b9d6f7b-q4m9t  [vllm-memory-watched]
       path: s2 → p2 ✗ rule/inference:vllm_memory_bytes:max
-      modelled: backend/mimir-otlp (otelcov's own model, not tested against the real component)
       why: Rule `inference:vllm_memory_bytes:max` only selects series matching `k8s_container_name="vllm"`, and this pod's series has no `k8s_container_name` label, so it never reaches `VLLMMemoryHigh`. `k8s_container_name` comes from resource attribute `k8s.container.name`, which `collector/k8sattributes` didn't set: pod has 2 containers (vllm, log-shipper) and the resource has neither `container.id` nor `k8s.container.name`, so the container can't be identified.
       fix: Set `k8s.container.name=vllm` in `OTEL_RESOURCE_ATTRIBUTES` on the `vllm` container.
       fix: Or have the SDK send `container.id`, so k8sattributes can match the container.
 ```
 
-An answer is only as sure as the steps it depends on. Where those are the real components' code (the collector's own processors, Prometheus's rule engine, Alertmanager's routing) or a model that passes the component's own tests (k8sattributes), the answer is plain "covered" or "NOT COVERED". Where it depends on a model of otelcov's own that hasn't been tested against the real thing, or on an approximation, it says "(modelled)" and lists them: here batch, which otelcov passes data through without batching, and the Mimir model, which is Prometheus's OTLP translator set up like Mimir and isn't yet checked against a real Mimir. Where it depends on a step otelcov can't model at all, it's `unverified`.
+An answer is only as sure as the steps it depends on. Where those are the real components' code (the collector's own processors, Prometheus's rule engine, Alertmanager's routing) or a model that passes tests against the real component, the answer is plain "covered" or "NOT COVERED". Two models of otelcov's own are tested that way: k8sattributes against upstream's test cases, and the Mimir model (Prometheus's OTLP translator set up like Mimir) against real Mimir 3.0 and 3.2, for topologies that give a Mimir version in that range. Where an answer depends on an approximation or an untested model, it says "(modelled)" and lists them: here batch, which otelcov passes data through without batching. Where it depends on a step otelcov can't model at all, it's `unverified`.
 
 Processors explain themselves too. Here a pull request changes the condition of a gateway `transform` statement, and the rule's `team="inference"` matcher loses both pods:
 
 ```console
 $ bin/otelcov scenario testdata/agent-gateway/scenarios/02-team-condition-pr.yaml
 02-team-condition-pr (evaluated at 2026-10-23T10:00:30Z)
-  NOT COVERED (modelled)  inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
+  NOT COVERED             inference/vllm-chat-6f9d8b7c4d-k2x7p  [vllm-memory-watched]
       path: s1 → p1 ✗ rule/team:vllm_memory_bytes:max
-      modelled: backend/mimir (otelcov's own model, not tested against the real component)
       why: Rule `team:vllm_memory_bytes:max` only selects series matching `team="inference"`, and this pod's series has no `team` label, so it never reaches `VLLMMemoryHigh`. `team` comes from resource attribute `team`, which `gateway/transform/team` didn't set: resource statement `set(attributes["team"], "inference") where attributes["k8s.namespace.name"] == "inference-prod"` didn't run: its condition is false for this signal.
       fix: Make the condition `attributes["k8s.namespace.name"] == "inference-prod"` in `gateway/transform/team` hold for this pod, or set `team` another way.
   ...

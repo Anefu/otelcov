@@ -173,3 +173,65 @@ func TestLabelNameSanitization(t *testing.T) {
 		t.Errorf("LabelName: %q %q", LabelName("_team"), LabelName("cost..center"))
 	}
 }
+
+// Exponential histograms are stored as native histograms (decision 73).
+func TestExponentialHistograms(t *testing.T) {
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("service.name", "api")
+	m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("rpc.duration")
+	m.SetUnit("ms")
+	eh := m.SetEmptyExponentialHistogram()
+	eh.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+	dp := eh.DataPoints().AppendEmpty()
+	dp.SetTimestamp(1_700_000_000_000_000_000)
+	dp.SetScale(1)
+	dp.Positive().SetOffset(2)
+	dp.Positive().BucketCounts().FromRaw([]uint64{1, 3})
+	dp.SetCount(4)
+	dp.SetSum(10)
+	out, err := New("mimir", Limits{OTelMetricSuffixesEnabled: true}).ProcessMetrics(context.Background(), []unit.Metric{{ID: "s1", Data: md}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := out.Items[0]
+	lset := unit.SeriesLabels(it.Data)
+	samples := unit.SeriesSamples(it.Data)
+	if lset.Get("__name__") != "rpc_duration_milliseconds" || lset.Get("job") != "api" || len(samples) != 1 || samples[0].H == nil ||
+		samples[0].H.Count != 4 || samples[0].H.Sum != 10 {
+		t.Fatalf("got %s %+v", lset, samples)
+	}
+	if v, ok := out.Signals[0].Value.(string); !ok || !strings.Contains(v, "count:4") {
+		t.Errorf("lineage value %v", out.Signals[0].Value)
+	}
+}
+
+func TestFidelity(t *testing.T) {
+	for v, tested := range map[string]bool{"3.0.0": true, "3.1.11": true, "v3.2.3": true, "3.2": true, "2.17.1": false, "3.3.0": false, "": false, "latest": false} {
+		st := Fidelity(v)
+		if st.Fidelity != lineage.Reimplementation || st.Conformance != tested || !strings.HasPrefix(st.Note, note) {
+			t.Errorf("%q: %+v", v, st)
+		}
+	}
+	if st := Fidelity("3.3.0"); !strings.Contains(st.Note, "tested for Mimir 3.0–3.2, not 3.3.0") {
+		t.Errorf("note: %s", st.Note)
+	}
+}
+
+// CI runs the conformance suite at both ends of the tested range.
+func TestWorkflowTestsTheRange(t *testing.T) {
+	b, err := os.ReadFile("../../../.github/workflows/mimir-conformance.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var versions []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "- mimir: "); ok {
+			versions = append(versions, v)
+		}
+	}
+	if len(versions) != 2 || !strings.HasPrefix(versions[0], TestedMin+".") || !strings.HasPrefix(versions[1], TestedMax+".") {
+		t.Errorf("the workflow runs Mimir %v; the model claims %s–%s", versions, TestedMin, TestedMax)
+	}
+}

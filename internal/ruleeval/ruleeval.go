@@ -11,6 +11,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 
@@ -23,8 +24,10 @@ import (
 type Output struct {
 	// Labels as the engine returned them.
 	Labels labels.Labels
-	// Value of the structural expression: not the real value.
+	// Value of the structural expression: not the real value. H is set
+	// instead when the output is a native histogram.
 	Value   float64
+	H       *histogram.FloatHistogram
 	Parents []int // indexes into the inputs
 	// Note is set when the parents are an over-approximation.
 	Note string
@@ -51,7 +54,7 @@ func Evaluate(ctx context.Context, eng *promqlx.Engine, expr parser.Expr, items 
 		lsets[i] = unit.SeriesLabels(it.Data)
 		series[i] = promqlx.Series{Labels: lsets[i]}
 		for _, s := range unit.SeriesSamples(it.Data) {
-			series[i].Samples = append(series[i].Samples, promqlx.Sample{T: s.T, V: s.V})
+			series[i].Samples = append(series[i].Samples, promqlx.Sample{T: s.T, V: s.V, H: s.H})
 		}
 	}
 	sel := selected(expr, lsets)
@@ -75,7 +78,7 @@ func Evaluate(ctx context.Context, eng *promqlx.Engine, expr parser.Expr, items 
 	}
 	used := map[int]bool{}
 	for _, s := range vec {
-		o := Output{Labels: s.Metric, Value: s.F}
+		o := Output{Labels: s.Metric, Value: s.F, H: s.H}
 		g, ok := groups[withoutName(s.Metric).String()]
 		switch {
 		case exErr != nil:

@@ -14,8 +14,7 @@
       ],
       "receiver": "inference-pager",
       "modelled_by": [
-        "collector/batch",
-        "backend/mimir-otlp"
+        "collector/batch"
       ]
     },
     {
@@ -30,8 +29,7 @@
       ],
       "receiver": "inference-pager",
       "modelled_by": [
-        "collector/batch",
-        "backend/mimir-otlp"
+        "collector/batch"
       ],
       "simulated_by": [
         "e3"
@@ -526,10 +524,6 @@
     }
   ],
   "stages": {
-    "backend/mimir-otlp": {
-      "fidelity": "reimplementation",
-      "note": "Prometheus's OTLP translator configured from Mimir's limits"
-    },
     "collector/batch": {
       "fidelity": "approximation",
       "note": "passes data through"

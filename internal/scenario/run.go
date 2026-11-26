@@ -163,7 +163,7 @@ func Run(ctx context.Context, s *Scenario) (*Result, error) {
 			return nil, fmt.Errorf("backend %s: %w", name, err)
 		}
 		backend := mimir.New(name, limits)
-		log.SetStage(backend.Name(), mimir.Fidelity)
+		log.SetStage(backend.Name(), mimir.Fidelity(topo.Backends[name].Version))
 		series, err := graph.Process(ctx, []graph.MetricsNode{backend}, runner.Delivered[name], log)
 		if err != nil {
 			return nil, err
