@@ -9,6 +9,7 @@ toolchain go1.24.13
 require (
 	// k8sattributes parses container images with it, as upstream does.
 	github.com/distribution/reference v0.6.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter v0.139.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.139.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.139.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/deltatocumulativeprocessor v0.139.0

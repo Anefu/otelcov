@@ -28,6 +28,13 @@ import (
 	_ "github.com/prometheus/prometheus/storage/remote/otlptranslator/prometheusremotewrite"
 	_ "github.com/prometheus/prometheus/util/annotations"
 
+	_ "github.com/golang/snappy"
+	_ "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter"
+	_ "github.com/prometheus/prometheus/prompb/io/prometheus/write/v2"
+	_ "go.opentelemetry.io/collector/exporter"
+	_ "go.opentelemetry.io/collector/exporter/exportertest"
+	_ "go.uber.org/zap/zaptest/observer"
+
 	_ "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	_ "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottldatapoint"
 	_ "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
